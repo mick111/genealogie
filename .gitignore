@@ -21,4 +21,6 @@ node_modules/
 
 # Secrets en clair (ne jamais committer)
 token
+token_publish
+token_register
 passwd
