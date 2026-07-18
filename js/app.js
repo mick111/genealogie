@@ -70,11 +70,36 @@ function migrateLegacyStorage(treeId) {
 // --------------------------------------------------------------------- login
 async function loadContainer() {
   const key = storageKey(state.treeId);
-  const local = localStorage.getItem(key);
-  if (local) { try { return JSON.parse(local); } catch (_) { /* corrompu -> ignore */ } }
-  const res = await fetch(treeEncUrl(state.treeId), { cache: 'no-store' });
-  if (!res.ok) throw new Error('Impossible de charger les données (' + res.status + ').');
-  return res.json();
+  const fetchRemote = async () => {
+    const res = await fetch(treeEncUrl(state.treeId), { cache: 'no-store' });
+    if (!res.ok) throw new Error('Impossible de charger les données (' + res.status + ').');
+    return res.json();
+  };
+
+  const rawLocal = localStorage.getItem(key);
+  if (rawLocal) {
+    try {
+      const local = JSON.parse(rawLocal);
+      if (authMode) {
+        // Brouillon local : valide seulement s'il est v2 MK et déchiffrable avec la session courante.
+        if (!isMkTree(local)) {
+          localStorage.removeItem(key);
+        } else if (authSession.mkKey) {
+          try {
+            await decryptTreeContainer(authSession.mkKey, local);
+            return local;
+          } catch (_) {
+            localStorage.removeItem(key);
+          }
+        }
+      } else {
+        return local;
+      }
+    } catch (_) {
+      localStorage.removeItem(key);
+    }
+  }
+  return fetchRemote();
 }
 
 function hasLocalEdits() {
@@ -462,6 +487,7 @@ async function unlock(passphrase, onStage = () => {}) {
 async function unlockWithMk(mkKey, onStage = () => {}) {
   authSession.mkKey = mkKey;
   authSession.treeKey = mkKey;
+  state.container = null;
   await unlock('', onStage);
 }
 
@@ -583,7 +609,18 @@ async function afterAuthUnlock(mkKey) {
     await unlockWithMk(mkKey);
     showApp();
   } catch (err) {
-    alert('Impossible de déverrouiller l\'arbre : ' + (err.message || err));
+    if (authMode && (err.message === 'BAD_PASSWORD' || err.message === 'LEGACY_TREE')) {
+      localStorage.removeItem(storageKey(state.treeId));
+      state.container = null;
+      try {
+        await unlockWithMk(mkKey);
+        showApp();
+        return;
+      } catch (_) { /* retry échoué */ }
+    }
+    alert('Impossible de déverrouiller l\'arbre : ' + (err.message === 'BAD_PASSWORD'
+      ? 'données locales obsolètes — rechargez la page et réessayez.'
+      : (err.message || err)));
     renderAuthGate(escapeHtml, afterAuthUnlock);
   }
 }
