@@ -37,7 +37,26 @@ body {
   background: var(--bg);
   color: var(--ink);
   line-height: 1.5;
+  padding-bottom: 1.6rem;
 }
+.site-version {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: .72rem;
+  color: var(--muted);
+  padding: .35rem .5rem;
+  pointer-events: none;
+  z-index: 5;
+}
+.site-version a {
+  pointer-events: auto;
+  color: var(--muted);
+  text-decoration: none;
+}
+.site-version a:hover { color: var(--ink); text-decoration: underline; }
 a { color: var(--accent-dark); text-decoration: none; }
 a:hover { text-decoration: underline; }
 .muted { color: var(--muted); font-weight: normal; font-size: .9em; }

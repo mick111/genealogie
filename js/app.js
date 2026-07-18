@@ -973,11 +973,47 @@ function defaultAuthTreeId(trees) {
   return (nonDemo || trees[0]).id;
 }
 
+async function renderSiteVersion() {
+  const el = document.getElementById('site-version');
+  if (!el) return;
+  try {
+    const res = await fetch('version.json', { cache: 'no-store' });
+    if (!res.ok) return;
+    const { commit } = await res.json();
+    if (!commit) return;
+    const detected = detectGithubRepo();
+    let owner = detected?.owner;
+    let repo = detected?.repo;
+    if (!owner || !repo) {
+      const meta = loadGithubMeta();
+      owner = meta?.owner;
+      repo = meta?.repo;
+    }
+    if (!owner || !repo) {
+      const metaRes = await fetch('data/github_meta.json', { cache: 'no-store' });
+      if (metaRes.ok) {
+        const meta = await metaRes.json();
+        owner = meta.owner;
+        repo = meta.repo;
+      }
+    }
+    if (owner && repo) {
+      const url = `https://github.com/${owner}/${repo}/commit/${encodeURIComponent(commit)}`;
+      el.innerHTML = `Version <a href="${url}" target="_blank" rel="noopener">${escapeHtml(commit)}</a>`;
+    } else {
+      el.textContent = `Version ${commit}`;
+    }
+    el.hidden = false;
+  } catch (_) { /* version.json absent */ }
+}
+
 async function boot() {
   if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
     renderInsecureContextError();
     return;
   }
+
+  renderSiteVersion();
 
   authMode = await authModeAvailable();
 

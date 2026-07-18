@@ -3,6 +3,8 @@
 # Nécessaire car le déchiffrement ne marche pas en ouverture directe (file://).
 cd "$(dirname "$0")" || exit 1
 
+node tools/write-version.mjs 2>/dev/null || true
+
 PORT=8000
 echo "🌳 Arbre généalogique — serveur local"
 echo "   → http://localhost:$PORT"
