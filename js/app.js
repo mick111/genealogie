@@ -8,7 +8,7 @@ import {
   clearGithubSettings, publishTree, githubErrorMessage, loadBundledGithubConfig,
 } from './github.js';
 import {
-  authModeAvailable, renderAuthGate, renderAdminPanel, renderPersonLink,
+  authModeAvailable, renderAuthGate, renderAdminPanel, renderAccountPanel, renderPersonLink,
   clearAuthSession, decryptTreeContainer, isMkTree,
 } from './auth/boot.js';
 import { authSession, canEditPerson, canEditTree, canPublish, needsPersonLink, isAdmin } from './auth/session.js';
@@ -641,7 +641,9 @@ function showApp() {
     $('#login').hidden = true;
     const app = $('#app');
     app.hidden = false;
-    app.innerHTML = '<header class="topbar"><a href="#/" class="brand">🌳 Généalogie</a></header><main id="view"></main>';
+    app.innerHTML = `<header class="topbar"><a href="#/" class="brand">🌳 Généalogie</a>${
+      authMode ? ' <a href="#/account" class="link-btn">Mon compte</a>' : ''
+    }</header><main id="view"></main>`;
     renderPersonLink($('#view'), escapeHtml, state, persist);
     return;
   }
@@ -658,6 +660,7 @@ function showApp() {
       </form>
       <span id="sync-status" class="sync-badge"></span>
       ${state.trees.length > 1 ? '<button id="switch-tree" class="link-btn" title="Changer d\'arbre">Arbres</button>' : ''}
+      ${authMode ? '<a href="#/account" class="link-btn">Mon compte</a>' : ''}
       ${isAdmin() ? '<a href="#/admin" class="link-btn">Admin</a>' : ''}
       ${allowPublish ? '<button id="publish" class="link-btn" title="Publier sur GitHub">Publier</button>' : ''}
       ${allowPublish ? '<button id="github-settings" class="link-btn" title="Configurer GitHub">⚙ GitHub</button>' : ''}
@@ -688,6 +691,7 @@ function route() {
   const arg = rest.join('/');
 
   if (section === 'admin') renderAdminPanel(view, escapeHtml, state, persist);
+  else if (section === 'account') renderAccountPanel(view, escapeHtml, state);
   else if (section === 'link-person') renderPersonLink(view, escapeHtml, state, persist);
   else if (section === 'person') renderPerson(view, decodeURIComponent(arg));
   else if (section === 'tree') renderTreeView(view, decodeURIComponent(arg));

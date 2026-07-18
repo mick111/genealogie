@@ -359,10 +359,52 @@ async function saveUserPasskey(user, mkRaw) {
     publicKey: user.publicKey,
     needsPasskey: false,
     ...(user.pinWrap ? { pinWrap: user.pinWrap } : {}),
-    ...(user.prfWrap ? { prfWrap: user.prfWrap } : {}),
   };
+  if (user.prfWrap) freshRegistry.users[idx].prfWrap = user.prfWrap;
+  else delete freshRegistry.users[idx].prfWrap;
   await saveRegistry(freshRegistry);
   return freshRegistry;
+}
+
+function passkeySectionHtml() {
+  return `
+    <section class="panel">
+      <h2>Ma passkey</h2>
+      <p class="muted">Recréez votre passkey après un changement d'appareil ou si l'ancienne a été supprimée des Réglages.</p>
+      <button type="button" class="btn" id="recreate-passkey">Recréer ma passkey</button>
+      <p id="passkey-status" class="muted" style="margin-top:.6rem"></p>
+    </section>`;
+}
+
+function wireRecreatePasskey(view, escapeHtml) {
+  view.querySelector('#recreate-passkey')?.addEventListener('click', async () => {
+    const status = view.querySelector('#passkey-status');
+    const btn = view.querySelector('#recreate-passkey');
+    if (!authSession.mkRaw) {
+      alert('Session expirée — reconnectez-vous avec votre PIN secours.');
+      return;
+    }
+    btn.disabled = true;
+    status.textContent = 'Création passkey…';
+    try {
+      const u = { ...authSession.user };
+      const reg = await registerPasskey(u.displayName, u.id);
+      u.credentialId = reg.credentialId;
+      u.publicKey = reg.publicKey;
+      u.needsPasskey = false;
+      if (reg.prfBytes) u.prfWrap = await wrapMkRawWithPrf(authSession.mkRaw, reg.prfBytes);
+      else delete u.prfWrap;
+      status.textContent = 'Publication…';
+      const freshRegistry = await saveUserPasskey(u, authSession.mkRaw);
+      const saved = freshRegistry.users.find((x) => x.id === u.id);
+      setAuthSession(saved, authSession.mkKey, freshRegistry, authSession.mkRaw);
+      status.textContent = 'Passkey enregistrée. Vous pouvez vous connecter avec passkey.';
+    } catch (err) {
+      status.innerHTML = `<span class="error">${escapeHtml(err.message || String(err))}</span>`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }
 
 function formatAccountPersonLink(user, state, escapeHtml) {
@@ -383,6 +425,26 @@ function formatAccountPersonLink(user, state, escapeHtml) {
   return `<a href="${href}">${escapeHtml(indi.name)}</a>`;
 }
 
+export function renderAccountPanel(view, escapeHtml, state) {
+  const u = authSession.user;
+  if (!u) {
+    view.innerHTML = '<section class="panel"><p>Non connecté.</p></section>';
+    return;
+  }
+  view.innerHTML = `
+    ${passkeySectionHtml()}
+    <section class="panel">
+      <h2>Mon compte</h2>
+      <p><strong>${escapeHtml(u.displayName)}</strong></p>
+      <p class="muted">Rôle : ${escapeHtml(ROLE_LABELS[u.role] || u.role)}</p>
+      <p class="muted">Personne dans l'arbre : ${formatAccountPersonLink(u, state, escapeHtml)}</p>
+      ${needsSetupFinalize(u)
+        ? '<p class="muted">Finalisez d\'abord votre compte depuis l\'écran de connexion.</p>'
+        : `<p class="muted">PIN secours : disponible si la passkey est perdue.</p>`}
+    </section>`;
+  wireRecreatePasskey(view, escapeHtml);
+}
+
 export async function renderAdminPanel(view, escapeHtml, state, persist) {
   if (!isAdmin()) {
     view.innerHTML = '<section class="panel"><p>Accès réservé à l\'administrateur.</p></section>';
@@ -394,12 +456,7 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
     .filter((u) => u.status === 'approved')
     .sort((a, b) => a.displayName.localeCompare(b.displayName, 'fr'));
   view.innerHTML = `
-    <section class="panel">
-      <h2>Ma passkey</h2>
-      <p class="muted">Recréez votre passkey après un changement d'appareil ou si l'ancienne a été supprimée des Réglages.</p>
-      <button type="button" class="btn" id="recreate-passkey">Recréer ma passkey</button>
-      <p id="passkey-status" class="muted" style="margin-top:.6rem"></p>
-    </section>
+    ${passkeySectionHtml()}
     <section class="panel">
       <h2>Comptes</h2>
       <p class="muted">${accounts.length} compte(s) approuvé(s).</p>
@@ -443,33 +500,7 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
         </div>`).join('') : '<p class="muted">Aucune demande.</p>'}
     </section>`;
 
-  view.querySelector('#recreate-passkey')?.addEventListener('click', async () => {
-    const status = view.querySelector('#passkey-status');
-    const btn = view.querySelector('#recreate-passkey');
-    if (!authSession.mkRaw) {
-      alert('Session expirée — reconnectez-vous avec votre PIN secours.');
-      return;
-    }
-    btn.disabled = true;
-    status.textContent = 'Création passkey…';
-    try {
-      const u = authSession.user;
-      const reg = await registerPasskey(u.displayName, u.id);
-      u.credentialId = reg.credentialId;
-      u.publicKey = reg.publicKey;
-      u.needsPasskey = false;
-      if (reg.prfBytes) u.prfWrap = await wrapMkRawWithPrf(authSession.mkRaw, reg.prfBytes);
-      status.textContent = 'Publication…';
-      const freshRegistry = await saveUserPasskey(u, authSession.mkRaw);
-      const saved = freshRegistry.users.find((x) => x.id === u.id);
-      setAuthSession(saved, authSession.mkKey, freshRegistry, authSession.mkRaw);
-      status.textContent = 'Passkey enregistrée. Vous pouvez vous connecter avec passkey.';
-    } catch (err) {
-      status.innerHTML = `<span class="error">${escapeHtml(err.message || String(err))}</span>`;
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  wireRecreatePasskey(view, escapeHtml);
 
   view.querySelectorAll('[data-approve]').forEach((btn) => {
       btn.addEventListener('click', async () => {
