@@ -41,9 +41,17 @@ async function ensurePrfWrap(user, mkRaw, registry) {
 }
 
 async function loginWithPasskey(registry, statusEl, escapeHtml, onUnlocked) {
-  const auth = await authenticatePasskey();
+  const passkeyUsers = registry.users.filter(
+    (u) => u.status === 'approved' && u.credentialId && u.prfWrap,
+  );
+  if (!passkeyUsers.length) {
+    throw new Error('Aucune passkey activée — connectez-vous une fois avec votre PIN secours.');
+  }
+  const auth = await authenticatePasskey(null, passkeyUsers.map((u) => u.credentialId));
   const user = findUserByCredential(registry, auth.credentialId);
-  if (!user) throw new Error('Compte non reconnu.');
+  if (!user) {
+    throw new Error('Passkey non enregistrée — supprimez les anciennes passkeys « Généalogie » dans Réglages, puis reconnectez-vous avec le PIN.');
+  }
   if (!user.prfWrap) {
     throw new Error('Utilisez votre PIN secours une fois pour activer la connexion passkey.');
   }

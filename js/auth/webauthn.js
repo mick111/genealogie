@@ -59,7 +59,7 @@ export async function registerPasskey(displayName, userId = uid()) {
   };
 }
 
-export async function authenticatePasskey(credentialIdB64str = null) {
+export async function authenticatePasskey(credentialIdB64str = null, allowedCredentialIds = null) {
   if (!window.PublicKeyCredential) throw new Error('WEBAUTHN_UNAVAILABLE');
   const opts = {
     challenge: crypto.getRandomValues(new Uint8Array(32)),
@@ -67,7 +67,12 @@ export async function authenticatePasskey(credentialIdB64str = null) {
     userVerification: 'preferred',
     extensions: { prf: { eval: { first: prfSalt() } } },
   };
-  if (credentialIdB64str) {
+  if (allowedCredentialIds?.length) {
+    opts.allowCredentials = allowedCredentialIds.map((id) => ({
+      type: 'public-key',
+      id: b64ToBuf(id),
+    }));
+  } else if (credentialIdB64str) {
     opts.allowCredentials = [{ type: 'public-key', id: b64ToBuf(credentialIdB64str) }];
   }
   const cred = /** @type {PublicKeyCredential} */ (await navigator.credentials.get({ publicKey: opts }));
