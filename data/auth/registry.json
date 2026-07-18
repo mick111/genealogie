@@ -22,6 +22,22 @@
         "iv": "DANxScAuCo3vSbyO",
         "ct": "pDg1zOsgQSGULZYMlIbHWGcs0y1MhvZmE0j8MSmLM/mMWguXewBB12XVij60eiJV"
       }
+    },
+    {
+      "id": "d266acf7-e23e-492c-b2c7-e4f88360e807",
+      "displayName": "Michael",
+      "credentialId": "UAYQdc5YOLfpKmeYjS7Q84/3ris=",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHkqDgDinl+RHxktErxvED5IxGL0q+ThZl8jKDADNsGeos1er0tUhF5GrilMlNeuW31rXjF/RthwMNjtXWZf08w==",
+      "role": "editor",
+      "status": "approved",
+      "personId": null,
+      "pinWrap": {
+        "v": 1,
+        "cipher": "AES-GCM",
+        "iv": "VzmAxYMkEAVGyQoW",
+        "ct": "VkzxHFiWrDuNNywkFIs6Gyrv1sRStJeIGE8MU4SA9Buhn1Gb6mnaLzHnkkaaF1BN"
+      },
+      "createdAt": "2026-07-18T22:13:16.337Z"
     }
   ]
 }
