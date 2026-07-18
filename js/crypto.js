@@ -92,7 +92,8 @@ export async function decryptTextWithKey(key, container) {
 // --- clé AES brute (256 bits) pour la clé maître MK ----------------------------
 
 export async function importRawAesKey(rawBytes) {
-  return crypto.subtle.importKey('raw', rawBytes, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  // extractable: true — nécessaire pour ré-envelopper la MK (PIN / passkey PRF).
+  return crypto.subtle.importKey('raw', rawBytes, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
 }
 
 export async function exportRawAesKey(key) {
