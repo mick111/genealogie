@@ -3,6 +3,10 @@
 # Nécessaire car le déchiffrement ne marche pas en ouverture directe (file://).
 cd "$(dirname "$0")" || exit 1
 
+if [ -x tools/install-githooks.sh ]; then
+  tools/install-githooks.sh 2>/dev/null || true
+fi
+
 node tools/write-version.mjs 2>/dev/null || true
 
 PORT=8000

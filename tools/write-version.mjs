@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // Écrit version.json (hash git court) pour affichage en bas de page.
-// Usage : node tools/write-version.mjs
+//
+// Usage :
+//   node tools/write-version.mjs
+//
+// Hook pre-commit (via tools/install-githooks.sh) : appelé avant chaque commit.
+// Le hash écrit est celui du HEAD courant (commit parent) ; il figure dans le
+// commit suivant et s'affiche en bas de page une fois déployé.
 
 import { writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';

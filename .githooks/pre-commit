@@ -1,0 +1,15 @@
+#!/bin/sh
+# Met à jour version.json avant chaque commit (hash git court du HEAD courant).
+set -e
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+node tools/write-version.mjs
+
+# Inclure version.json dans le commit en cours si modifié.
+if ! git diff --quiet version.json 2>/dev/null || ! git diff --cached --quiet version.json 2>/dev/null; then
+  git add version.json
+fi
+
+exit 0
