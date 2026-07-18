@@ -219,20 +219,9 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
         user.needsPasskey = false;
         user.pinWrap = await wrapMkRawWithPin(mkRaw, user.id, loginPin);
         if (reg.prfBytes) user.prfWrap = await wrapMkRawWithPrf(mkRaw, reg.prfBytes);
-        const freshRegistry = await loadRegistry();
-        const idx = freshRegistry.users.findIndex((u) => u.id === user.id);
-        if (idx < 0) throw new Error('Admin introuvable dans le registry.');
-        freshRegistry.users[idx] = {
-          ...freshRegistry.users[idx],
-          credentialId: user.credentialId,
-          publicKey: user.publicKey,
-          needsPasskey: false,
-          pinWrap: user.pinWrap,
-          ...(user.prfWrap ? { prfWrap: user.prfWrap } : {}),
-        };
         status.textContent = 'Publication registry…';
-        await saveRegistry(freshRegistry);
-        setAuthSession(freshRegistry.users[idx], mkKey, freshRegistry, mkRaw);
+        const freshRegistry = await saveUserPasskey({ ...user, pinWrap: user.pinWrap }, mkRaw);
+        setAuthSession(freshRegistry.users.find((x) => x.id === user.id), mkKey, freshRegistry, mkRaw);
         await onUnlocked(mkKey);
       } catch (err) {
         status.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`;
@@ -243,6 +232,22 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
   screenHome();
 }
 
+async function saveUserPasskey(user, mkRaw) {
+  const freshRegistry = await loadRegistry();
+  const idx = freshRegistry.users.findIndex((u) => u.id === user.id);
+  if (idx < 0) throw new Error('Utilisateur introuvable dans le registry.');
+  freshRegistry.users[idx] = {
+    ...freshRegistry.users[idx],
+    credentialId: user.credentialId,
+    publicKey: user.publicKey,
+    needsPasskey: false,
+    ...(user.pinWrap ? { pinWrap: user.pinWrap } : {}),
+    ...(user.prfWrap ? { prfWrap: user.prfWrap } : {}),
+  };
+  await saveRegistry(freshRegistry);
+  return freshRegistry;
+}
+
 export async function renderAdminPanel(view, escapeHtml, state, persist) {
   if (!isAdmin()) {
     view.innerHTML = '<section class="panel"><p>Accès réservé à l\'administrateur.</p></section>';
@@ -250,6 +255,12 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
   }
   const pending = (await loadPending()).pending;
   view.innerHTML = `
+    <section class="panel">
+      <h2>Ma passkey</h2>
+      <p class="muted">Recréez votre passkey après un changement d'appareil ou si l'ancienne a été supprimée des Réglages.</p>
+      <button type="button" class="btn" id="recreate-passkey">Recréer ma passkey</button>
+      <p id="passkey-status" class="muted" style="margin-top:.6rem"></p>
+    </section>
     <section class="panel">
       <h2>Validation des comptes</h2>
       <p class="muted">${pending.length} demande(s) en attente.</p>
@@ -265,6 +276,34 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
           </div>
         </div>`).join('') : '<p class="muted">Aucune demande.</p>'}
     </section>`;
+
+  view.querySelector('#recreate-passkey')?.addEventListener('click', async () => {
+    const status = view.querySelector('#passkey-status');
+    const btn = view.querySelector('#recreate-passkey');
+    if (!authSession.mkRaw) {
+      alert('Session expirée — reconnectez-vous avec votre PIN secours.');
+      return;
+    }
+    btn.disabled = true;
+    status.textContent = 'Création passkey…';
+    try {
+      const u = authSession.user;
+      const reg = await registerPasskey(u.displayName, u.id);
+      u.credentialId = reg.credentialId;
+      u.publicKey = reg.publicKey;
+      u.needsPasskey = false;
+      if (reg.prfBytes) u.prfWrap = await wrapMkRawWithPrf(authSession.mkRaw, reg.prfBytes);
+      status.textContent = 'Publication…';
+      const freshRegistry = await saveUserPasskey(u, authSession.mkRaw);
+      const saved = freshRegistry.users.find((x) => x.id === u.id);
+      setAuthSession(saved, authSession.mkKey, freshRegistry, authSession.mkRaw);
+      status.textContent = 'Passkey enregistrée. Vous pouvez vous connecter avec passkey.';
+    } catch (err) {
+      status.innerHTML = `<span class="error">${escapeHtml(err.message || String(err))}</span>`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   view.querySelectorAll('[data-approve]').forEach((btn) => {
       btn.addEventListener('click', async () => {
