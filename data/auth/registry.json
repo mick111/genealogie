@@ -14,13 +14,13 @@
         "ct": "0m02gVS7ZGixJhgjoebJ2qHICy6UrPrqfbD6V81MD/WojTR55G55xp9ysK5Wx6Ct"
       },
       "createdAt": "2026-07-18T22:08:00.969Z",
-      "credentialId": "cZvetGPAQpLanHiLPTrDODVjHvyUxh+moYjnrjyn1HjZFLSLqw31EXFrXypSBjUE",
-      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEDzLjlTTLYTWk+H3Q2zyjT9yAuRi0YtJGSyS4M3nwTpZaMmvqiygywOf+y7SmCHBXCbz1ZXhPTXBY98y4lviErQ==",
+      "credentialId": "adr0qDcAft14/1JK5uxTgsoVv3MvJvKT",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkj3dnVwCiq0MpT2Eq1ms8HtqTHWQj+G5eRv+IsqCcZM3i88PfX4JIhmDKSQEUSZkHp8rnjVaAlKzsj2O8KOalA==",
       "prfWrap": {
         "v": 1,
         "cipher": "AES-GCM",
-        "iv": "DANxScAuCo3vSbyO",
-        "ct": "pDg1zOsgQSGULZYMlIbHWGcs0y1MhvZmE0j8MSmLM/mMWguXewBB12XVij60eiJV"
+        "iv": "AK9uC4uc2dfLw+cK",
+        "ct": "c/esIe7P+ULZlL9Tjr1C+MRBYnBwSxl8utHz41Rt8SNnBBhiZT2EdlbaJCntdVXz"
       }
     },
     {
