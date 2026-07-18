@@ -1,139 +1,324 @@
-// tree.js — arbre ascendant (pedigree) en SVG, interactif.
-// La personne racine est à gauche ; ses ancêtres s'étendent vers la droite.
-// Clic sur une case -> callback onSelect(id).
+// tree.js — trois présentations d'arbre, façon MyHeritage :
+//   • 'family'   : vue sablier VERTICALE (ancêtres au-dessus, descendants en-
+//                  dessous, conjoint·e à droite, frères/sœurs à gauche)
+//   • 'pedigree' : ascendants HORIZONTAUX (focus à gauche, ancêtres à droite)
+//   • 'fan'      : éventail radial des ancêtres
+// Clic sur une personne -> onSelect(id) (recentre l'arbre).
 
 import { yearOf } from './gedcom.js';
 
-const BOX_W = 170;
-const BOX_H = 52;
-const COL_GAP = 60;   // espace horizontal entre générations
-const ROW_GAP = 14;   // espace vertical minimal entre cases
-
+const BOX_W = 158, BOX_H = 48, H_GAP = 26, V_GAP = 58;
+const UNIT = BOX_W + H_GAP, ROW = BOX_H + V_GAP, MARGIN = 16;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-// Renvoie { father, mother } (ids ou null) de l'individu via sa famille FAMC.
-function parentsOf(indi, families) {
-  if (!indi || !indi.famc.length) return { father: null, mother: null };
-  const fam = families.get(indi.famc[0]);
-  if (!fam) return { father: null, mother: null };
-  return { father: fam.husb, mother: fam.wife };
+// -------------------------------------------------------------- dispatcher
+export function renderTree(container, data, rootId, onSelect, opts = {}) {
+  const mode = opts.mode || 'family';
+  container.innerHTML = '';
+  if (!data.individuals.get(rootId)) { container.textContent = 'Personne introuvable.'; return; }
+  if (mode === 'pedigree') return renderPedigree(container, data, rootId, onSelect, opts.up ?? 4);
+  if (mode === 'fan') return renderFan(container, data, rootId, onSelect, opts.up ?? 5);
+  return renderFamily(container, data, rootId, onSelect, opts.up ?? 2, opts.down ?? 2);
 }
 
-// Construit l'arbre binaire d'ancêtres jusqu'à maxGen.
-function buildAncestors(id, individuals, families, gen, maxGen) {
-  const indi = individuals.get(id);
-  if (!indi) return null;
-  const node = { indi, gen, father: null, mother: null };
-  if (gen < maxGen) {
-    const { father, mother } = parentsOf(indi, families);
-    node.father = buildAncestors(father, individuals, families, gen + 1, maxGen);
-    node.mother = buildAncestors(mother, individuals, families, gen + 1, maxGen);
+// -------------------------------------------------------------- relations
+function relations(data) {
+  const { individuals, families } = data;
+  return {
+    parentsOf(id) {
+      const p = individuals.get(id);
+      const fam = p && p.famc.length ? families.get(p.famc[0]) : null;
+      return { father: fam ? fam.husb : null, mother: fam ? fam.wife : null };
+    },
+    childrenOf(id) {
+      const p = individuals.get(id); const out = [];
+      if (p) for (const fid of p.fams) { const f = families.get(fid); if (f) for (const c of f.chil) if (!out.includes(c)) out.push(c); }
+      return out;
+    },
+    spousesOf(id) {
+      const p = individuals.get(id); const out = [];
+      if (p) for (const fid of p.fams) { const f = families.get(fid); if (!f) continue; const s = f.husb === id ? f.wife : f.husb; if (s && !out.includes(s)) out.push(s); }
+      return out;
+    },
+    siblingsOf(id) {
+      const p = individuals.get(id);
+      if (!p || !p.famc.length) return [];
+      const f = families.get(p.famc[0]);
+      return f ? f.chil.filter((c) => c !== id) : [];
+    },
+  };
+}
+
+// ============================================================== FAMILY (sablier)
+function renderFamily(container, data, rootId, onSelect, maxUp, maxDown) {
+  const { individuals } = data;
+  const R = relations(data);
+
+  let descLeaf = 0;
+  const buildDesc = (id, depth) => {
+    const node = { id, depth, kids: [] };
+    if (depth < maxDown) for (const c of R.childrenOf(id)) node.kids.push(buildDesc(c, depth + 1));
+    node.x = node.kids.length ? (node.kids[0].x + node.kids[node.kids.length - 1].x) / 2 : descLeaf++;
+    return node;
+  };
+  const descRoot = buildDesc(rootId, 0);
+
+  let ancLeaf = 0;
+  const buildAnc = (id, depth) => {
+    const node = { id, depth };
+    if (depth < maxUp) {
+      const { father, mother } = R.parentsOf(id);
+      node.father = father ? buildAnc(father, depth + 1) : null;
+      node.mother = mother ? buildAnc(mother, depth + 1) : null;
+    }
+    const ps = [node.father, node.mother].filter(Boolean);
+    node.x = ps.length ? (ps[0].x + ps[ps.length - 1].x) / 2 : ancLeaf++;
+    return node;
+  };
+  const ancRoot = buildAnc(rootId, 0);
+
+  const shift = descRoot.x - ancRoot.x;
+  (function s(n) { if (!n) return; n.x += shift; s(n.father); s(n.mother); })(ancRoot);
+  const focusX = descRoot.x, focusRow = maxUp;
+
+  const boxes = [], links = [];
+  const cxOf = (xU) => xU * UNIT + BOX_W / 2;
+  const addBox = (id, xU, row, f = false) => boxes.push({ id, xU, row, focus: f });
+
+  // Lien familial propre : barre de mariage (optionnelle) entre parents,
+  // descente depuis le milieu du couple, puis barre horizontale au-dessus des
+  // enfants, chaque enfant relié verticalement à cette barre.
+  const familyLink = (parentXs, childXs, parentRow, childRow, drawBar = true) => {
+    const pBot = parentRow * ROW + BOX_H;
+    const cTop = childRow * ROW;
+    const busY = (pBot + cTop) / 2;
+    let coupleMid;
+    if (parentXs.length === 2) {
+      const a = Math.min(parentXs[0], parentXs[1]), b = Math.max(parentXs[0], parentXs[1]);
+      if (drawBar) links.push({ marr: true, d: `M ${a * UNIT + BOX_W} ${parentRow * ROW + BOX_H / 2} H ${b * UNIT}` });
+      coupleMid = (parentXs[0] + parentXs[1]) / 2;
+    } else coupleMid = parentXs[0];
+    links.push({ d: `M ${cxOf(coupleMid)} ${pBot} V ${busY}` });     // descente
+    const cxs = childXs.map(cxOf);
+    if (cxs.length > 1) links.push({ d: `M ${Math.min(...cxs)} ${busY} H ${Math.max(...cxs)}` }); // barre enfants
+    for (const cx of cxs) links.push({ d: `M ${cx} ${cTop} V ${busY}` }); // montées
+  };
+
+  addBox(rootId, focusX, focusRow, true);
+
+  // conjoint·e(s) à droite + barre de mariage ; décale les descendants sous le couple
+  const spouses = R.spousesOf(rootId);
+  const spouseXs = [];
+  spouses.forEach((s, i) => {
+    const sx = focusX + 1 + i; addBox(s, sx, focusRow); spouseXs.push(sx);
+    links.push({ marr: true, d: `M ${(focusX + i) * UNIT + BOX_W} ${focusRow * ROW + BOX_H / 2} H ${sx * UNIT}` });
+  });
+  if (spouseXs.length) (function sh(n) { for (const k of n.kids) { k.x += spouseXs.length / 2; sh(k); } })(descRoot);
+
+  // descendants
+  (function walk(n, depth) {
+    if (!n.kids.length) return;
+    n.kids.forEach((k) => addBox(k.id, k.x, focusRow + depth + 1));
+    const parentXs = depth === 0 && spouseXs.length ? [focusX, spouseXs[0]] : [n.x];
+    familyLink(parentXs, n.kids.map((k) => k.x), focusRow + depth, focusRow + depth + 1, false);
+    n.kids.forEach((k) => walk(k, depth + 1));
+  })(descRoot, 0);
+
+  // frères/sœurs (à gauche) — enfants des parents du focus, comme lui
+  const sibs = R.siblingsOf(rootId);
+  const sibXs = sibs.map((s, i) => { const sx = focusX - 1 - i; addBox(s, sx, focusRow); return sx; });
+
+  // ancêtres (barre de couple + descente vers l'enfant ; focus+fratrie pour le 1ᵉ niveau)
+  (function walk(n) {
+    const ps = [n.father, n.mother].filter(Boolean);
+    if (!ps.length) return;
+    ps.forEach((p) => addBox(p.id, p.x, focusRow - p.depth));
+    const childXs = n.depth === 0 ? [focusX, ...sibXs] : [n.x];
+    familyLink(ps.map((p) => p.x), childXs, focusRow - n.depth - 1, focusRow - n.depth, true);
+    ps.forEach((p) => walk(p));
+  })(ancRoot);
+
+  const minX = Math.min(...boxes.map((b) => b.xU)), maxX = Math.max(...boxes.map((b) => b.xU));
+  const minR = Math.min(...boxes.map((b) => b.row)), maxR = Math.max(...boxes.map((b) => b.row));
+  const dx = -minX * UNIT + MARGIN, dy = -minR * ROW + MARGIN;
+  const width = (maxX - minX) * UNIT + BOX_W + MARGIN * 2, height = (maxR - minR) * ROW + BOX_H + MARGIN * 2;
+
+  const svg = el('svg', { class: 'tree-svg', viewBox: `0 0 ${width} ${height}`, width, height });
+  for (const lk of links) svg.appendChild(el('path', { class: lk.marr ? 'tree-link tree-marr' : 'tree-link', d: shiftPath(lk.d, dx, dy) }));
+  const seen = new Set();
+  for (const b of boxes) {
+    const key = b.id + '@' + b.row + '@' + b.xU; if (seen.has(key)) continue; seen.add(key);
+    const person = individuals.get(b.id); if (!person) continue;
+    svg.appendChild(nodeBox(person, b.xU * UNIT + dx, b.row * ROW + dy, b.focus, () => onSelect(b.id)));
   }
-  return node;
+  container.appendChild(svg);
 }
 
-// Assigne les positions y (post-ordre). Retourne le y du centre du nœud.
-function layout(node, cursor) {
-  const kids = [node.father, node.mother].filter(Boolean);
-  if (!kids.length) {
-    node.y = cursor.y;
-    cursor.y += BOX_H + ROW_GAP;
-    return node.y;
+// ============================================================== PEDIGREE (horizontal)
+function renderPedigree(container, data, rootId, onSelect, maxGen) {
+  const { individuals } = data;
+  const R = relations(data);
+  let leaf = 0;
+  const build = (id, gen) => {
+    const node = { id, gen };
+    if (gen < maxGen) {
+      const { father, mother } = R.parentsOf(id);
+      node.father = father ? build(father, gen + 1) : null;
+      node.mother = mother ? build(mother, gen + 1) : null;
+    }
+    const ps = [node.father, node.mother].filter(Boolean);
+    node.y = ps.length ? (ps[0].y + ps[ps.length - 1].y) / 2 : leaf++;
+    return node;
+  };
+  const root = build(rootId, 0);
+
+  const nodes = [], links = [];
+  (function walk(n) {
+    n.px = n.gen * (BOX_W + 50);
+    n.py = n.y * (BOX_H + 18);
+    nodes.push(n);
+    for (const p of [n.father, n.mother]) {
+      if (!p) continue;
+      links.push({ x1: n.px + BOX_W, y1: n.py + BOX_H / 2, x2: (n.gen + 1) * (BOX_W + 50), y2: p.y * (BOX_H + 18) + BOX_H / 2 });
+      walk(p);
+    }
+  })(root);
+
+  const maxY = Math.max(...nodes.map((n) => n.py));
+  const width = (maxGen + 1) * (BOX_W + 50) + MARGIN * 2;
+  const height = maxY + BOX_H + MARGIN * 2;
+  const svg = el('svg', { class: 'tree-svg', viewBox: `0 0 ${width} ${height}`, width, height });
+  for (const l of links) {
+    const midX = (l.x1 + l.x2) / 2;
+    svg.appendChild(el('path', { class: 'tree-link', d: `M ${l.x1 + MARGIN} ${l.y1 + MARGIN} C ${midX + MARGIN} ${l.y1 + MARGIN}, ${midX + MARGIN} ${l.y2 + MARGIN}, ${l.x2 + MARGIN} ${l.y2 + MARGIN}` }));
   }
-  const ys = kids.map((k) => layout(k, cursor));
-  node.y = (Math.min(...ys) + Math.max(...ys)) / 2;
-  return node.y;
+  for (const n of nodes) {
+    const person = individuals.get(n.id); if (!person) continue;
+    svg.appendChild(nodeBox(person, n.px + MARGIN, n.py + MARGIN, n.gen === 0, () => onSelect(n.id)));
+  }
+  container.appendChild(svg);
 }
 
+// ============================================================== FAN (éventail)
+function renderFan(container, data, rootId, onSelect, maxGen) {
+  const { individuals } = data;
+  const R = relations(data);
+
+  // ancêtres indexés en tas binaire : gen g, position i -> parents (g+1, 2i)/(2i+1)
+  const gens = [[rootId]];
+  for (let g = 1; g <= maxGen; g++) {
+    const prev = gens[g - 1], row = [];
+    for (const id of prev) {
+      if (!id) { row.push(null, null); continue; }
+      const { father, mother } = R.parentsOf(id);
+      row.push(father || null, mother || null);
+    }
+    gens.push(row);
+  }
+
+  const R0 = 62;                     // rayon du disque central (focus)
+  const RING = 74;                   // épaisseur d'un anneau
+  const A0 = Math.PI, A1 = 2 * Math.PI; // demi-cercle supérieur
+  const span = A1 - A0;
+  const outer = R0 + RING * maxGen;
+  const size = (outer + MARGIN) * 2;
+  const cx = size / 2, cy = size / 2;
+
+  const svg = el('svg', { class: 'tree-svg', viewBox: `0 0 ${size} ${size}`, width: size, height: size });
+  const groups = [];
+
+  for (let g = 1; g <= maxGen; g++) {
+    const count = 2 ** g, slice = span / count;
+    const rIn = R0 + RING * (g - 1), rOut = R0 + RING * g;
+    for (let i = 0; i < count; i++) {
+      const a0 = A0 + i * slice, a1 = a0 + slice, mid = (a0 + a1) / 2;
+      const id = gens[g][i];
+      const person = id ? individuals.get(id) : null;
+      const sexCls = !person ? 'sex-empty' : person.sex === 'F' ? 'sex-f' : person.sex === 'M' ? 'sex-m' : 'sex-u';
+      const g_ = el('g', person ? { class: 'fan-node', tabindex: '0', role: 'button' } : { class: 'fan-empty' });
+      g_.appendChild(el('path', { class: `fan-seg ${sexCls}`, d: sector(cx, cy, rIn, rOut, a0, a1) }));
+      if (person) {
+        const rMid = (rIn + rOut) / 2;
+        let deg = mid * 180 / Math.PI;
+        if (deg > 90 && deg < 270) deg += 180; // garder le texte lisible
+        const tx = cx + rMid * Math.cos(mid), ty = cy + rMid * Math.sin(mid);
+        const label = fanLabel(person, g);
+        const txt = el('text', { class: 'fan-text', x: tx, y: ty, transform: `rotate(${deg.toFixed(1)} ${tx} ${ty})`, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
+        label.forEach((line, k) => txt.appendChild(el('tspan', { x: tx, dy: k === 0 ? `-${(label.length - 1) * 0.5}em` : '1.05em' }, line)));
+        g_.appendChild(txt);
+        const select = () => onSelect(id);
+        g_.addEventListener('click', select);
+        g_.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); } });
+      }
+      groups.push(g_);
+    }
+  }
+  for (const g_ of groups) svg.appendChild(g_);
+
+  // disque central (focus)
+  const focus = individuals.get(rootId);
+  const fg = el('g', { class: 'fan-node is-root', tabindex: '0', role: 'button' });
+  fg.appendChild(el('circle', { class: 'fan-center', cx, cy, r: R0 }));
+  const fl = fanLabel(focus, 0);
+  const ft = el('text', { class: 'fan-text', x: cx, y: cy, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
+  fl.forEach((line, k) => ft.appendChild(el('tspan', { x: cx, dy: k === 0 ? `-${(fl.length - 1) * 0.5}em` : '1.05em' }, line)));
+  fg.appendChild(ft);
+  fg.addEventListener('click', () => onSelect(rootId));
+  svg.appendChild(fg);
+
+  container.appendChild(svg);
+}
+
+function fanLabel(person, gen) {
+  // Nom sur 1-2 lignes + années (compact quand la génération est lointaine).
+  const name = person.name;
+  const parts = gen >= 4 ? [truncate(name, 16)] : splitName(name);
+  const b = person.birth ? yearOf(person.birth.date) : '';
+  const d = person.death ? yearOf(person.death.date) : '';
+  if (b || d) parts.push(`${b || '?'}–${d || (person.death ? '?' : '')}`.replace(/–$/, ''));
+  return parts;
+}
+function splitName(name) {
+  const words = name.split(' ');
+  if (words.length < 3) return [name];
+  const mid = Math.ceil(words.length / 2);
+  return [words.slice(0, mid).join(' '), words.slice(mid).join(' ')];
+}
+function sector(cx, cy, rIn, rOut, a0, a1) {
+  const P = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  const [x0, y0] = P(rIn, a0), [x1, y1] = P(rOut, a0), [x2, y2] = P(rOut, a1), [x3, y3] = P(rIn, a1);
+  const large = (a1 - a0) > Math.PI ? 1 : 0;
+  return `M ${f(x0)} ${f(y0)} L ${f(x1)} ${f(y1)} A ${f(rOut)} ${f(rOut)} 0 ${large} 1 ${f(x2)} ${f(y2)} L ${f(x3)} ${f(y3)} A ${f(rIn)} ${f(rIn)} 0 ${large} 0 ${f(x0)} ${f(y0)} Z`;
+}
+const f = (n) => n.toFixed(1);
+
+// -------------------------------------------------------------- utils communs
+function nodeBox(person, x, y, isFocus, onSelect) {
+  const sexCls = person.sex === 'F' ? 'sex-f' : person.sex === 'M' ? 'sex-m' : 'sex-u';
+  const g = el('g', { class: 'tree-node' + (isFocus ? ' is-root' : ''), transform: `translate(${x}, ${y})`, tabindex: '0', role: 'button' });
+  g.appendChild(el('rect', { class: `tree-box ${sexCls}`, width: BOX_W, height: BOX_H, rx: 8 }));
+  g.appendChild(el('text', { class: 'tree-name', x: 10, y: 20 }, truncate(person.name, 20)));
+  const sub = lifespan(person);
+  if (sub) g.appendChild(el('text', { class: 'tree-dates', x: 10, y: 37 }, sub));
+  g.addEventListener('click', onSelect);
+  g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } });
+  return g;
+}
 function el(tag, attrs, text) {
   const e = document.createElementNS(SVG_NS, tag);
   for (const k in attrs) e.setAttribute(k, attrs[k]);
   if (text != null) e.textContent = text;
   return e;
 }
-
-function subtitle(indi) {
-  const b = indi.birth ? yearOf(indi.birth.date) : '';
-  const d = indi.death ? yearOf(indi.death.date) : '';
+function shiftPath(d, dx, dy) {
+  return d.replace(/([MVH]) ([\d.-]+)(?: ([\d.-]+))?/g, (m, cmd, a, b) =>
+    cmd === 'M' ? `M ${(+a + dx).toFixed(1)} ${(+b + dy).toFixed(1)}`
+      : cmd === 'V' ? `V ${(+a + dy).toFixed(1)}`
+        : `H ${(+a + dx).toFixed(1)}`);
+}
+function lifespan(p) {
+  const b = p.birth ? yearOf(p.birth.date) : '', d = p.death ? yearOf(p.death.date) : '';
   if (!b && !d) return '';
-  return `${b || '?'} – ${d || (indi.death ? '?' : '')}`.replace(/ – $/, '');
+  return `${b || '?'} – ${d || (p.death ? '?' : '')}`.replace(/ – $/, '');
 }
-
-export function renderTree(container, data, rootId, maxGen, onSelect) {
-  const { individuals, families } = data;
-  container.innerHTML = '';
-
-  const rootNode = buildAncestors(rootId, individuals, families, 0, maxGen);
-  if (!rootNode) {
-    container.textContent = 'Personne introuvable.';
-    return;
-  }
-
-  const cursor = { y: 0 };
-  layout(rootNode, cursor);
-
-  // Récupère tous les nœuds et calcule x par génération.
-  const nodes = [];
-  (function walk(n) {
-    if (!n) return;
-    n.x = n.gen * (BOX_W + COL_GAP);
-    nodes.push(n);
-    walk(n.father);
-    walk(n.mother);
-  })(rootNode);
-
-  const width = (maxGen + 1) * (BOX_W + COL_GAP);
-  const height = Math.max(cursor.y, BOX_H) + ROW_GAP;
-
-  const svg = el('svg', {
-    class: 'tree-svg',
-    viewBox: `0 0 ${width} ${height}`,
-    width,
-    height,
-  });
-
-  // Connecteurs enfant -> parents.
-  for (const n of nodes) {
-    for (const p of [n.father, n.mother]) {
-      if (!p) continue;
-      const x1 = n.x + BOX_W;
-      const y1 = n.y + BOX_H / 2;
-      const x2 = p.x;
-      const y2 = p.y + BOX_H / 2;
-      const midX = (x1 + x2) / 2;
-      svg.appendChild(
-        el('path', {
-          class: 'tree-link',
-          d: `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`,
-        })
-      );
-    }
-  }
-
-  // Cases individus.
-  for (const n of nodes) {
-    const g = el('g', {
-      class: 'tree-node' + (n.gen === 0 ? ' is-root' : ''),
-      transform: `translate(${n.x}, ${n.y})`,
-      tabindex: '0',
-      role: 'button',
-    });
-    const sexClass = n.indi.sex === 'F' ? 'sex-f' : n.indi.sex === 'M' ? 'sex-m' : 'sex-u';
-    g.appendChild(el('rect', { class: `tree-box ${sexClass}`, width: BOX_W, height: BOX_H, rx: 8 }));
-    g.appendChild(el('text', { class: 'tree-name', x: 12, y: 22 }, truncate(n.indi.name, 22)));
-    const sub = subtitle(n.indi);
-    if (sub) g.appendChild(el('text', { class: 'tree-dates', x: 12, y: 40 }, sub));
-    const select = () => onSelect(n.indi.id);
-    g.addEventListener('click', select);
-    g.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); }
-    });
-    svg.appendChild(g);
-  }
-
-  container.appendChild(svg);
-}
-
-function truncate(s, n) {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
-}
+function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }

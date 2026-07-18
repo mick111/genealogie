@@ -2,8 +2,9 @@
 import { readFileSync } from 'node:fs';
 import { decryptTextContainer } from '../js/crypto.js';
 import { parseGedcom, formatDate } from '../js/gedcom.js';
+import { loadPassword } from './passwd.mjs';
 
-const PW = process.env.GEN_PASSWORD || 'famille2024';
+const PW = loadPassword('famille2024');
 const container = JSON.parse(readFileSync(new URL('../data/tree.enc', import.meta.url), 'utf8'));
 
 try { await decryptTextContainer(container, 'mauvais'); console.log('FAIL: bad pw accepted'); }

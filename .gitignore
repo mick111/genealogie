@@ -13,3 +13,7 @@ data/media/*.webp
 # Fichiers système
 .DS_Store
 node_modules/
+
+# Secrets en clair (ne jamais committer)
+token
+passwd

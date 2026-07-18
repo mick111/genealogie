@@ -1,11 +1,16 @@
 // app.js — application principale : login chiffré, routing, fiches, recherche.
 
-import { decryptTextContainer, decryptBytesWithKey } from './crypto.js';
-import { parseGedcom, formatDate, yearOf } from './gedcom.js';
+import { decryptTextContainer, decryptBytesWithKey, encryptText } from './crypto.js';
+import { parseGedcom, serializeGedcom, formatDate, yearOf } from './gedcom.js';
 import { renderTree } from './tree.js';
+import {
+  detectGithubRepo, loadGithubMeta, hasGithubToken, saveGithubSettings,
+  clearGithubSettings, publishTree, githubErrorMessage, loadBundledGithubConfig,
+} from './github.js';
 
 const DATA_URL = 'data/tree.enc';
 const MEDIA_DIR = 'data/media/';
+const STORAGE_KEY = 'gen_data_v1'; // modifications locales chiffrées
 const MAX_GEN = 4; // générations affichées dans l'arbre ascendant
 
 const state = {
@@ -17,6 +22,9 @@ const state = {
 
 // Cache des URLs blob d'images déchiffrées (évite de re-déchiffrer).
 const imageCache = new Map();
+
+// Présentation de l'arbre : mode + nombre de générations (ajustables).
+const treeView = { mode: 'family', up: 2, down: 2 };
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -45,9 +53,282 @@ function mediaEncUrl(file) {
 
 // --------------------------------------------------------------------- login
 async function loadContainer() {
+  // Priorité aux modifications locales (chiffrées) si présentes.
+  const local = localStorage.getItem(STORAGE_KEY);
+  if (local) { try { return JSON.parse(local); } catch (_) { /* corrompu -> ignore */ } }
   const res = await fetch(DATA_URL, { cache: 'no-store' });
   if (!res.ok) throw new Error('Impossible de charger les données (' + res.status + ').');
   return res.json();
+}
+
+function hasLocalEdits() { return !!localStorage.getItem(STORAGE_KEY); }
+
+// Télécharge le fichier chiffré courant (secours si la publication GitHub échoue).
+async function exportData() {
+  const text = serializeGedcom(state.individuals, state.families);
+  const container = await encryptText(state.key, state.container.kdf, text);
+  const blob = new Blob([JSON.stringify(container)], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: 'tree.enc' });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  alert('Fichier « tree.enc » téléchargé.');
+}
+
+async function publishData() {
+  const meta = loadGithubMeta();
+  if (!meta?.owner || !meta?.repo || !hasGithubToken()) {
+    openGithubSettings(() => publishData());
+    return;
+  }
+  if (!confirm(`Publier l'arbre sur GitHub ?\n\n${meta.owner}/${meta.repo} → ${meta.path} (${meta.branch})`)) return;
+
+  const btn = $('#publish');
+  const prev = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Publication…'; }
+  try {
+    await persist();
+    await publishTree(state.key, state.container, (s) => { if (btn) btn.textContent = s; });
+    localStorage.removeItem(STORAGE_KEY);
+    updateSyncStatus();
+    alert('Arbre publié sur GitHub.\n\nLe site en ligne sera à jour dans quelques instants.');
+  } catch (err) {
+    alert('Publication impossible :\n' + githubErrorMessage(err));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev || 'Publier'; }
+  }
+}
+
+function openGithubSettings(onSaved) {
+  const detected = detectGithubRepo();
+  const meta = { branch: 'main', path: 'data/tree.enc', ...detected, ...loadGithubMeta() };
+  const wrap = document.createElement('div');
+  wrap.className = 'modal-overlay';
+  wrap.innerHTML = `
+    <form class="modal-card">
+      <h3>Publication GitHub</h3>
+      <p class="muted modal-hint">Le token est chiffré (AES-256) avec la clé de ton mot de passe et stocké localement.
+      Il ne quitte ton navigateur que pour appeler l'API GitHub lors d'une publication.</p>
+      <label>Propriétaire<input name="owner" value="${escapeHtml(meta.owner || '')}" placeholder="ex. mick111" required></label>
+      <label>Dépôt<input name="repo" value="${escapeHtml(meta.repo || '')}" placeholder="ex. genealogie" required></label>
+      <label>Branche<input name="branch" value="${escapeHtml(meta.branch || 'main')}"></label>
+      <label>Fichier<input name="path" value="${escapeHtml(meta.path || 'data/tree.enc')}"></label>
+      <label>Token GitHub (PAT)
+        <input name="token" type="password" autocomplete="off"
+          placeholder="${hasGithubToken() ? '••••••••  (laisser vide pour conserver)' : 'ghp_… ou github_pat_…'}"
+          ${hasGithubToken() ? '' : 'required'}>
+      </label>
+      <p class="muted modal-hint">Crée un token avec accès en écriture au dépôt
+      (<a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a>,
+      scope <code>repo</code> ou permission « Contents : Read and write »).</p>
+      <div class="modal-actions">
+        ${hasGithubToken() ? '<button type="button" class="link-btn" data-clear>Oublier le token</button>' : ''}
+        <button type="button" class="link-btn" data-cancel>Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    </form>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.querySelector('[data-cancel]').addEventListener('click', close);
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+  const clearBtn = wrap.querySelector('[data-clear]');
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    if (!confirm('Supprimer le token GitHub enregistré ?')) return;
+    clearGithubSettings();
+    close();
+    updateSyncStatus();
+  });
+  wrap.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const data = Object.fromEntries(fd.entries());
+    if (!data.token && !hasGithubToken()) {
+      alert('Indique un token GitHub.');
+      return;
+    }
+    try {
+      await saveGithubSettings(state.key, state.container.kdf, data);
+      close();
+      updateSyncStatus();
+      if (onSaved) onSaved();
+    } catch (err) {
+      alert(githubErrorMessage(err));
+    }
+  });
+}
+
+function updateSyncStatus() {
+  const el = $('#sync-status');
+  if (!el) return;
+  if (hasLocalEdits()) {
+    el.textContent = 'Modifs locales';
+    el.className = 'sync-badge unsynced';
+    el.title = 'Sauvegardées dans ce navigateur ; publie pour mettre le site en ligne à jour.';
+  } else if (hasGithubToken()) {
+    el.textContent = 'À jour';
+    el.className = 'sync-badge synced';
+    el.title = 'Synchronisé avec la version publiée.';
+  } else {
+    el.textContent = '';
+    el.className = 'sync-badge';
+    el.title = '';
+  }
+}
+
+// Re-sérialise + re-chiffre les données et les enregistre en local (localStorage).
+async function persist() {
+  const text = serializeGedcom(state.individuals, state.families);
+  state.container = await encryptText(state.key, state.container.kdf, text);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.container));
+}
+
+// ---- modifications du modèle -----------------------------------------------
+function nextId(prefix, map) {
+  let max = 0;
+  const re = new RegExp('^@' + prefix + '(\\d+)@$');
+  for (const key of map.keys()) { const m = re.exec(key); if (m) max = Math.max(max, +m[1]); }
+  return '@' + prefix + (max + 1) + '@';
+}
+function makePerson({ given, surname, sex, birthDate, birthPlace, deathDate, deathPlace }) {
+  const id = nextId('I', state.individuals);
+  const p = {
+    id, given: given || '', surname: surname || '', sex: sex || '',
+    name: [given, surname].filter(Boolean).join(' ') || '(sans nom)',
+    birth: (birthDate || birthPlace) ? { date: birthDate || '', place: birthPlace || '' } : null,
+    death: (deathDate || deathPlace) ? { date: deathDate || '', place: deathPlace || '' } : null,
+    famc: [], fams: [], media: [],
+  };
+  state.individuals.set(id, p);
+  return p;
+}
+function makeFamily(husb, wife) {
+  const id = nextId('F', state.families);
+  const f = { id, husb: husb || null, wife: wife || null, chil: [], marr: null, div: null };
+  state.families.set(id, f);
+  return f;
+}
+function addParent(childId, data) {
+  const child = state.individuals.get(childId);
+  const parent = makePerson(data);
+  let fam = child.famc.length ? state.families.get(child.famc[0]) : null;
+  if (!fam) { fam = makeFamily(); fam.chil.push(childId); child.famc.push(fam.id); }
+  if (parent.sex === 'F' && !fam.wife) fam.wife = parent.id;
+  else if (parent.sex === 'M' && !fam.husb) fam.husb = parent.id;
+  else if (!fam.husb) fam.husb = parent.id;
+  else if (!fam.wife) fam.wife = parent.id;
+  else fam.husb = parent.id; // les deux pris : remplace le père
+  parent.fams.push(fam.id);
+  return parent.id;
+}
+function addSpouse(personId, data) {
+  const person = state.individuals.get(personId);
+  const spouse = makePerson(data);
+  const fam = person.sex === 'F' ? makeFamily(spouse.id, personId) : makeFamily(personId, spouse.id);
+  person.fams.push(fam.id); spouse.fams.push(fam.id);
+  return spouse.id;
+}
+// familyId : union existante à laquelle rattacher l'enfant, ou null pour créer
+// une nouvelle union (enfant d'une autre relation / parent seul).
+function addChild(personId, familyId, data) {
+  const person = state.individuals.get(personId);
+  const child = makePerson(data);
+  let fam = familyId ? state.families.get(familyId) : null;
+  if (!fam) {
+    fam = person.sex === 'F' ? makeFamily(null, personId) : makeFamily(personId, null);
+    person.fams.push(fam.id);
+  }
+  fam.chil.push(child.id); child.famc.push(fam.id);
+  return child.id;
+}
+function editPerson(id, d) {
+  const p = state.individuals.get(id);
+  p.given = d.given || ''; p.surname = d.surname || '';
+  p.name = [d.given, d.surname].filter(Boolean).join(' ') || '(sans nom)';
+  p.sex = d.sex || '';
+  p.birth = (d.birthDate || d.birthPlace) ? { date: d.birthDate || '', place: d.birthPlace || '' } : null;
+  p.death = (d.deathDate || d.deathPlace) ? { date: d.deathDate || '', place: d.deathPlace || '' } : null;
+}
+
+// Retire une famille de tous les famc/fams des individus.
+function removeFamilyRefs(fid) {
+  for (const p of state.individuals.values()) {
+    p.fams = p.fams.filter((f) => f !== fid);
+    p.famc = p.famc.filter((f) => f !== fid);
+  }
+}
+// Supprime un individu et nettoie toutes les références.
+function deletePerson(id) {
+  const person = state.individuals.get(id);
+  if (!person) return;
+  const affected = new Set([...person.fams, ...person.famc]);
+  for (const fid of affected) {
+    const fam = state.families.get(fid);
+    if (!fam) continue;
+    if (fam.husb === id) fam.husb = null;
+    if (fam.wife === id) fam.wife = null;
+    fam.chil = fam.chil.filter((c) => c !== id);
+  }
+  state.individuals.delete(id);
+  // Supprime les familles devenues inutiles (aucun enfant + au plus un conjoint).
+  for (const fid of affected) {
+    const fam = state.families.get(fid);
+    if (!fam) continue;
+    const spouses = (fam.husb ? 1 : 0) + (fam.wife ? 1 : 0);
+    if (fam.chil.length === 0 && spouses <= 1) {
+      state.families.delete(fid);
+      removeFamilyRefs(fid);
+    }
+  }
+}
+
+// ---- modale d'édition ------------------------------------------------------
+function openForm(title, initial, onSubmit, extraHtml = '') {
+  const i = initial || {};
+  const wrap = document.createElement('div');
+  wrap.className = 'modal-overlay';
+  wrap.innerHTML = `
+    <form class="modal-card">
+      <h3>${escapeHtml(title)}</h3>
+      ${extraHtml}
+      <label>Prénom(s)<input name="given" value="${escapeHtml(i.given || '')}" autofocus></label>
+      <label>Nom<input name="surname" value="${escapeHtml(i.surname || '')}"></label>
+      <label>Sexe
+        <select name="sex">
+          <option value=""${!i.sex ? ' selected' : ''}>—</option>
+          <option value="M"${i.sex === 'M' ? ' selected' : ''}>Homme</option>
+          <option value="F"${i.sex === 'F' ? ' selected' : ''}>Femme</option>
+        </select>
+      </label>
+      <label>Naissance (date)<input name="birthDate" value="${escapeHtml(i.birthDate || '')}" placeholder="ex. 12 MAR 1980 ou 1980"></label>
+      <label>Naissance (lieu)<input name="birthPlace" value="${escapeHtml(i.birthPlace || '')}"></label>
+      <label>Décès (date)<input name="deathDate" value="${escapeHtml(i.deathDate || '')}" placeholder="laisser vide si vivant"></label>
+      <label>Décès (lieu)<input name="deathPlace" value="${escapeHtml(i.deathPlace || '')}"></label>
+      <div class="modal-actions">
+        <button type="button" class="link-btn" data-cancel>Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    </form>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.querySelector('[data-cancel]').addEventListener('click', close);
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+  wrap.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const data = Object.fromEntries(fd.entries());
+    close();
+    await onSubmit(data);
+  });
+}
+
+// Applique une modification puis persiste et navigue vers `goId`.
+async function applyEdit(fn, goId) {
+  const id = fn();
+  await persist();
+  updateSyncStatus();
+  const target = goId || id;
+  if (location.hash === '#/person/' + encodeURIComponent(target)) route();
+  else location.hash = '#/person/' + encodeURIComponent(target);
 }
 
 async function unlock(passphrase, onStage = () => {}) {
@@ -61,6 +342,7 @@ async function unlock(passphrase, onStage = () => {}) {
   state.key = key;
   state.individuals = individuals;
   state.families = families;
+  await loadBundledGithubConfig();
   sessionStorage.setItem('gen_pass', passphrase);
   onStage('Terminé.');
 }
@@ -145,10 +427,18 @@ function showApp() {
       <form id="search-form" class="search">
         <input type="search" id="q" placeholder="Rechercher une personne…" autocomplete="off" />
       </form>
+      <span id="sync-status" class="sync-badge"></span>
+      <button id="publish" class="link-btn" title="Publier data/tree.enc sur GitHub">Publier</button>
+      <button id="github-settings" class="link-btn" title="Configurer le dépôt et le token GitHub">⚙ GitHub</button>
+      <button id="export" class="link-btn" title="Télécharger tree.enc (secours)">⬇︎</button>
       <button id="logout" class="link-btn">Déconnexion</button>
     </header>
     <main id="view"></main>`;
   $('#logout').addEventListener('click', logout);
+  $('#export').addEventListener('click', exportData);
+  $('#publish').addEventListener('click', publishData);
+  $('#github-settings').addEventListener('click', () => openGithubSettings());
+  updateSyncStatus();
   $('#search-form').addEventListener('submit', (e) => {
     e.preventDefault();
     location.hash = '#/search/' + encodeURIComponent($('#q').value.trim());
@@ -270,34 +560,137 @@ function renderPerson(view, id) {
           <h2>${escapeHtml(p.name)} <span class="muted">${personLifespan(p)}</span></h2>
           ${eventLine('Naissance', p.birth)}
           ${eventLine('Décès', p.death)}
-          <a class="btn" href="#/tree/${encodeURIComponent(id)}">Voir l'arbre ascendant</a>
+          <a class="btn" href="#/tree/${encodeURIComponent(id)}">Voir l'arbre</a>
+          <button class="btn btn-ghost" data-act="edit">Modifier</button>
+          <button class="btn btn-danger" data-act="delete">Supprimer</button>
         </div>
       </div>
 
-      ${parents.length ? `<div class="rel-block"><h4>Parents</h4><div class="card-row">${parents.map(personCard).join('')}</div></div>` : ''}
+      <div class="rel-block">
+        <h4>Parents ${parents.length < 2 ? '<button class="add-btn" data-act="add-parent">+ ajouter</button>' : ''}</h4>
+        <div class="card-row">${parents.map(personCard).join('') || '<span class="muted">Aucun parent renseigné.</span>'}</div>
+      </div>
       ${siblings.length ? `<div class="rel-block"><h4>Frères et sœurs</h4><div class="card-row">${siblings.map(personCard).join('')}</div></div>` : ''}
       ${unionsHtml}
+      <div class="rel-block actions-row">
+        <button class="add-btn" data-act="add-spouse">+ Conjoint·e</button>
+        <button class="add-btn" data-act="add-child">+ Enfant</button>
+      </div>
       ${p.media.length > 1 ? `<div class="rel-block"><h4>Photos</h4><div class="gallery">${
         p.media.map((m) => `<img data-enc="${escapeHtml(mediaEncUrl(m.file))}" alt=""/>`).join('')
       }</div></div>` : ''}
     </section>`;
 
   hydrateImages(view);
+
+  // Actions d'édition
+  const act = (sel, fn) => { const b = view.querySelector(`[data-act="${sel}"]`); if (b) b.addEventListener('click', fn); };
+  act('edit', () => openForm('Modifier ' + p.name, {
+    given: p.given, surname: p.surname, sex: p.sex,
+    birthDate: p.birth?.date, birthPlace: p.birth?.place,
+    deathDate: p.death?.date, deathPlace: p.death?.place,
+  }, (d) => applyEdit(() => { editPerson(id, d); return id; }, id)));
+  act('delete', async () => {
+    if (!confirm(`Supprimer « ${p.name} » de l'arbre ?\nLes liens familiaux vers cette personne seront retirés.`)) return;
+    deletePerson(id);
+    await persist();
+    updateSyncStatus();
+    location.hash = '#/';
+  });
+  act('add-parent', () => openForm('Ajouter un parent', {}, (d) => applyEdit(() => addParent(id, d), id)));
+  act('add-spouse', () => openForm('Ajouter un·e conjoint·e', {}, (d) => applyEdit(() => addSpouse(id, d), id)));
+  act('add-child', () => {
+    // Rôle de l'autre parent selon le sexe du focus (comme MyHeritage).
+    const role = p.sex === 'M' ? 'mère' : p.sex === 'F' ? 'père' : 'autre parent';
+    const Role = role.charAt(0).toUpperCase() + role.slice(1);
+    // Unions existantes (autre parent nommé).
+    const opts = p.fams.map((fid) => {
+      const fam = state.families.get(fid);
+      const otherId = fam ? (fam.husb === id ? fam.wife : fam.husb) : null;
+      const other = otherId ? state.individuals.get(otherId) : null;
+      return `<option value="${fid}">${other ? escapeHtml(other.name) : role + ' non renseigné·e'}</option>`;
+    }).join('');
+    const extra = `<label>${Role}
+      <select name="coparent">
+        ${opts}
+        <option value="new">${role === 'mère' ? 'Nouvelle mère' : role === 'père' ? 'Nouveau père' : 'Nouveau parent'}…</option>
+        <option value="none">Pas de ${role}</option>
+      </select>
+    </label>`;
+    openForm('Ajouter un enfant', {}, (d) => applyEdit(() => {
+      // "new" et "none" créent une nouvelle union (l'autre parent pourra être
+      // ajouté ensuite via la fiche de l'enfant). Une union existante = son id.
+      const famId = (d.coparent === 'new' || d.coparent === 'none') ? null : d.coparent;
+      return addChild(id, famId, d);
+    }, id), extra);
+  });
 }
+
+function stepper(kind, label, min, max) {
+  return `<span class="step" data-min="${min}" data-max="${max}">
+    <span class="step-label">${label}</span>
+    <button class="step-btn" data-gen="${kind}" data-delta="-1" aria-label="moins">−</button>
+    <b id="gen-${kind}">${treeView[kind]}</b>
+    <button class="step-btn" data-gen="${kind}" data-delta="1" aria-label="plus">+</button>
+  </span>`;
+}
+
+const TREE_MODES = [
+  { id: 'family', label: 'Famille' },
+  { id: 'pedigree', label: 'Pedigree' },
+  { id: 'fan', label: 'Éventail' },
+];
 
 function renderTreeView(view, id) {
   const p = state.individuals.get(id);
+
+  const draw = () => {
+    // Onglets de mode
+    view.querySelectorAll('.tree-tab').forEach((t) =>
+      t.classList.toggle('active', t.dataset.mode === treeView.mode));
+    // Contrôles de générations selon le mode
+    const controls = view.querySelector('#tree-controls');
+    controls.innerHTML =
+      (treeView.mode === 'family'
+        ? stepper('up', 'Ancêtres', 0, 5) + stepper('down', 'Descendants', 0, 5)
+        : stepper('up', 'Générations', 1, treeView.mode === 'fan' ? 7 : 6)) +
+      `<span class="muted">Clique une personne pour recentrer l'arbre.</span>`;
+    controls.querySelectorAll('.step-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const k = btn.dataset.gen;
+        const step = btn.closest('.step');
+        const min = Number(step.dataset.min), max = Number(step.dataset.max);
+        treeView[k] = Math.max(min, Math.min(max, treeView[k] + Number(btn.dataset.delta)));
+        controls.querySelector('#gen-' + k).textContent = treeView[k];
+        drawTree();
+      });
+    });
+    drawTree();
+  };
+
+  const drawTree = () => renderTree(
+    $('#tree-container'), state, id,
+    (pid) => { location.hash = '#/tree/' + encodeURIComponent(pid); },
+    { mode: treeView.mode, up: treeView.up, down: treeView.down }
+  );
+
   view.innerHTML = `
     <section class="panel">
       <div class="tree-head">
-        <h2>Arbre de ${p ? escapeHtml(p.name) : ''}</h2>
+        <h2>${p ? escapeHtml(p.name) : ''}</h2>
         <a class="btn" href="#/person/${encodeURIComponent(id)}">← Fiche</a>
       </div>
+      <div class="tree-tabs">
+        ${TREE_MODES.map((m) => `<button class="tree-tab" data-mode="${m.id}">${m.label}</button>`).join('')}
+      </div>
+      <div id="tree-controls" class="tree-controls"></div>
       <div id="tree-container" class="tree-scroll"></div>
     </section>`;
-  renderTree($('#tree-container'), state, id, MAX_GEN, (pid) => {
-    location.hash = '#/tree/' + encodeURIComponent(pid);
+
+  view.querySelectorAll('.tree-tab').forEach((t) => {
+    t.addEventListener('click', () => { treeView.mode = t.dataset.mode; draw(); });
   });
+  draw();
 }
 
 function escapeHtml(s) {

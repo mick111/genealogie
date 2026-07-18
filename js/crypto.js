@@ -14,6 +14,12 @@ function b64ToBytes(b64) {
   return bytes;
 }
 
+function bytesToB64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
 // Dérive la clé AES-GCM à partir de la phrase secrète et du sel du conteneur.
 export async function deriveKey(passphrase, saltB64, iterations, hash) {
   const baseKey = await crypto.subtle.importKey(
@@ -28,8 +34,22 @@ export async function deriveKey(passphrase, saltB64, iterations, hash) {
     baseKey,
     { name: 'AES-GCM', length: 256 },
     false,
-    ['decrypt']
+    ['encrypt', 'decrypt']
   );
+}
+
+// Chiffre un texte en conteneur, en réutilisant le même sel (kdf) que l'original
+// pour que la clé dérivée au login reste valable.
+export async function encryptText(key, kdf, text) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const buf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text));
+  return {
+    v: 1,
+    kdf,
+    cipher: 'AES-GCM',
+    iv: bytesToB64(iv),
+    ct: bytesToB64(new Uint8Array(buf)),
+  };
 }
 
 async function decryptRaw(key, ivB64, ctB64) {
@@ -61,4 +81,10 @@ export async function decryptTextContainer(container, passphrase) {
 export async function decryptBytesWithKey(key, container) {
   const buf = await decryptRaw(key, container.iv, container.ct);
   return new Uint8Array(buf);
+}
+
+// Déchiffre un conteneur texte avec une clé déjà dérivée (ex. token GitHub chiffré).
+export async function decryptTextWithKey(key, container) {
+  const buf = await decryptRaw(key, container.iv, container.ct);
+  return new TextDecoder().decode(buf);
 }

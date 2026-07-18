@@ -17,6 +17,7 @@ import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { pbkdf2Sync, randomBytes, createCipheriv } from 'node:crypto';
 import { createInterface } from 'node:readline';
+import { loadPassword } from './passwd.mjs';
 
 const ITERATIONS = 200000;
 const HASH = 'SHA-256';
@@ -65,7 +66,7 @@ async function main() {
     process.exit(1);
   }
 
-  const password = process.env.GEN_PASSWORD || (await askPassword());
+  const password = loadPassword() || (await askPassword());
   if (!password) {
     console.error('Mot de passe vide, abandon.');
     process.exit(1);

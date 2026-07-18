@@ -167,6 +167,37 @@ export function formatDate(gedDate) {
   return prefix + s.replace(/\b([A-Z]{3})\b/g, (mm, mon) => MONTHS[mon] || mon);
 }
 
+// Sérialise les Maps individuals/families en texte GEDCOM (pour ré-export).
+export function serializeGedcom(individuals, families) {
+  const L = ['0 HEAD', '1 SOUR genealogie-web', '1 GEDC', '2 VERS 5.5.1', '1 CHAR UTF-8'];
+  const ev = (tag, e) => {
+    if (!e) return;
+    L.push('1 ' + tag);
+    if (e.date) L.push('2 DATE ' + e.date);
+    if (e.place) L.push('2 PLAC ' + e.place);
+  };
+  for (const p of individuals.values()) {
+    L.push(`0 ${p.id} INDI`);
+    L.push(`1 NAME ${p.given || ''} /${p.surname || ''}/`);
+    if (p.sex) L.push('1 SEX ' + p.sex);
+    ev('BIRT', p.birth);
+    ev('DEAT', p.death);
+    for (const f of p.famc) L.push('1 FAMC ' + f);
+    for (const f of p.fams) L.push('1 FAMS ' + f);
+    for (const m of p.media || []) { L.push('1 OBJE'); if (m.file) L.push('2 FILE ' + m.file); if (m.title) L.push('2 TITL ' + m.title); }
+  }
+  for (const fam of families.values()) {
+    L.push(`0 ${fam.id} FAM`);
+    if (fam.husb) L.push('1 HUSB ' + fam.husb);
+    if (fam.wife) L.push('1 WIFE ' + fam.wife);
+    for (const c of fam.chil) L.push('1 CHIL ' + c);
+    ev('MARR', fam.marr);
+    ev('DIV', fam.div);
+  }
+  L.push('0 TRLR');
+  return L.join('\n');
+}
+
 // Année extraite d'une date GEDCOM (pour tri / affichage compact).
 export function yearOf(gedDate) {
   if (!gedDate) return '';

@@ -5,7 +5,9 @@ gratuitement sur **GitHub Pages**. Les données sont **chiffrées** (AES-256) : 
 fichier publié est illisible sans le mot de passe, même en regardant le code source.
 
 - Aucune dépendance, aucune étape de build côté site (HTML/CSS/JS vanilla).
-- Fonctionnalités : arbre ascendant interactif, fiches individuelles, recherche, photos.
+- Fonctionnalités : **3 vues d'arbre** (Famille/sablier, Pedigree, Éventail) avec
+  choix du nombre de générations, fiches individuelles, recherche, photos.
+- **Édition** : ajouter parents / conjoint·e / enfants, modifier une fiche.
 - Accès par **mot de passe** ou par **lien avec token**.
 
 ---
@@ -48,7 +50,7 @@ mise à jour de ton arbre ou de tes photos. Pour changer de mot de passe, relanc
 simplement le build avec le nouveau (tout est re-chiffré).
 
 > Test rapide : `node tools/verify.mjs` déchiffre et affiche un échantillon
-> (mot de passe via `GEN_PASSWORD`, défaut `famille2024` pour l'exemple).
+> (mot de passe via `passwd` à la racine, `GEN_PASSWORD`, ou défaut `famille2024` pour l'exemple).
 
 ## 3. Tester en local
 
@@ -76,6 +78,37 @@ Il faut un serveur HTTP (les modules ES ne se chargent pas via `file://`).
   puis le token est retiré de la barre d'adresse.
 
 ---
+
+## Éditer l'arbre
+
+Sur une fiche : **Modifier**, **Supprimer**, **+ Ajouter un parent**,
+**+ Conjoint·e**, **+ Enfant**. Pour un enfant, un menu **« Mère / Père »**
+permet de choisir le co-parent (union existante, nouveau, ou « Pas de mère/père »).
+Supprimer une personne retire proprement ses liens familiaux.
+
+Comme le site est statique, les modifications sont enregistrées **chiffrées dans
+ton navigateur** (localStorage) : elles persistent sur cet appareil et sont
+prioritaires sur le fichier publié.
+
+Pour **publier / partager** tes modifications :
+
+1. Clique **Publier** (en haut) — configure une fois le dépôt et un token GitHub
+   (le token est **chiffré** localement avec la clé de ton mot de passe).
+2. Ou télécharge un secours via **⬇︎** puis remplace `data/tree.enc` à la main.
+
+> Astuce : pour repartir de la version publiée (annuler les modifs locales),
+> vide le stockage du site dans ton navigateur (ou exécute
+> `localStorage.removeItem('gen_data_v1')` dans la console).
+
+## Les 3 vues d'arbre
+
+- **Famille** (sablier) : ancêtres au-dessus, descendants en-dessous, conjoint·e
+  et frères/sœurs sur la ligne du centre.
+- **Pedigree** : ascendants dépliés horizontalement.
+- **Éventail** : ascendants en éventail radial.
+
+Chaque vue a un réglage du **nombre de générations**, et un **clic sur une
+personne recentre l'arbre** sur elle.
 
 ## Photos
 
@@ -109,6 +142,7 @@ js/crypto.js         déchiffrement WebCrypto
 js/gedcom.js         parseur GEDCOM
 js/tree.js           arbre ascendant SVG
 js/app.js            application (login, routing, fiches, recherche)
+js/github.js         publication GitHub (token chiffré)
 data/tree.enc        GEDCOM chiffré (généré, publié)
 data/media/*.enc     photos chiffrées (générées, publiées)
 tools/build.mjs      chiffre le .ged + les photos  ->  *.enc
