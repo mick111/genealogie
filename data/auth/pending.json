@@ -1,14 +1,4 @@
 {
   "v": 1,
-  "pending": [
-    {
-      "id": "d266acf7-e23e-492c-b2c7-e4f88360e807",
-      "displayName": "Michael",
-      "credentialId": "UAYQdc5YOLfpKmeYjS7Q84/3ris=",
-      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHkqDgDinl+RHxktErxvED5IxGL0q+ThZl8jKDADNsGeos1er0tUhF5GrilMlNeuW31rXjF/RthwMNjtXWZf08w==",
-      "pinHint": true,
-      "createdAt": "2026-07-18T22:12:28.818Z",
-      "status": "pending"
-    }
-  ]
+  "pending": []
 }
