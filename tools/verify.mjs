@@ -4,17 +4,26 @@ import { decryptTextContainer } from '../js/crypto.js';
 import { parseGedcom, formatDate } from '../js/gedcom.js';
 import { loadPassword } from './passwd.mjs';
 
+function parseArgs(argv) {
+  let treeId = 'principal';
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--tree' && argv[i + 1]) treeId = argv[++i];
+  }
+  return treeId;
+}
+
+const treeId = parseArgs(process.argv.slice(2));
 const PW = loadPassword('famille2024');
-const container = JSON.parse(readFileSync(new URL('../data/tree.enc', import.meta.url), 'utf8'));
+const encPath = `trees/${treeId}/tree.enc`;
+const container = JSON.parse(readFileSync(new URL(`../${encPath}`, import.meta.url), 'utf8'));
 
 try { await decryptTextContainer(container, 'mauvais'); console.log('FAIL: bad pw accepted'); }
 catch (e) { console.log('OK  mauvais mot de passe rejeté:', e.message); }
 
 const { text } = await decryptTextContainer(container, PW);
 const { individuals, families } = parseGedcom(text);
-console.log(`OK  déchiffré + parsé: ${individuals.size} individus, ${families.size} familles`);
+console.log(`OK  ${treeId}: ${individuals.size} individus, ${families.size} familles`);
 
-// Échantillon générique (indépendant des identifiants réels).
 const someone = [...individuals.values()].find((p) => p.birth) || individuals.values().next().value;
 console.log('    ex individu:', someone.name,
   '| né', someone.birth ? formatDate(someone.birth.date) : '?',

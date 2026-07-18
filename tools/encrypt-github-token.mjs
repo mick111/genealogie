@@ -44,7 +44,7 @@ const meta = {
   owner: 'mick111',
   repo: 'genealogie',
   branch: 'main',
-  path: 'data/tree.enc',
+  path: 'trees/principal/tree.enc',
 };
 writeFileSync('data/github_meta.json', JSON.stringify(meta, null, 2) + '\n');
 

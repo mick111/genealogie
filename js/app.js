@@ -7,13 +7,16 @@ import {
   detectGithubRepo, loadGithubMeta, hasGithubToken, saveGithubSettings,
   clearGithubSettings, publishTree, githubErrorMessage, loadBundledGithubConfig,
 } from './github.js';
+import {
+  loadTreesIndex, getCurrentTreeId, setCurrentTreeId, findTreeMeta,
+  treeEncUrl, treeMediaDir, storageKey, defaultGithubPath,
+} from './trees.js';
 
-const DATA_URL = 'data/tree.enc';
-const MEDIA_DIR = 'data/media/';
-const STORAGE_KEY = 'gen_data_v1'; // modifications locales chiffrées
 const MAX_GEN = 4; // générations affichées dans l'arbre ascendant
 
 const state = {
+  trees: null,          // catalogue depuis trees/index.json
+  treeId: null,         // arbre courant
   container: null,      // conteneur chiffré (JSON)
   key: null,            // clé AES dérivée (réutilisée pour les photos)
   individuals: null,    // Map id -> individu
@@ -44,24 +47,37 @@ function personLifespan(indi) {
 }
 
 function mediaEncUrl(file) {
-  // On résout toute référence (chemin local ou URL MyHeritage) vers le fichier
-  // chiffré data/media/<nom>.enc généré par tools/build.mjs.
-  const clean = file.split(/[?#]/)[0];      // retire query/fragment d'URL
-  const base = clean.split(/[\\/]/).pop();  // dernier segment = nom de fichier
-  return MEDIA_DIR + base + '.enc';
+  const clean = file.split(/[?#]/)[0];
+  const base = clean.split(/[\\/]/).pop();
+  return treeMediaDir(state.treeId) + base + '.enc';
+}
+
+function migrateLegacyStorage(treeId) {
+  const legacy = localStorage.getItem('gen_data_v1');
+  const key = storageKey(treeId);
+  if (legacy && !localStorage.getItem(key) && treeId === 'principal') {
+    localStorage.setItem(key, legacy);
+    localStorage.removeItem('gen_data_v1');
+  }
 }
 
 // --------------------------------------------------------------------- login
 async function loadContainer() {
-  // Priorité aux modifications locales (chiffrées) si présentes.
-  const local = localStorage.getItem(STORAGE_KEY);
+  const key = storageKey(state.treeId);
+  const local = localStorage.getItem(key);
   if (local) { try { return JSON.parse(local); } catch (_) { /* corrompu -> ignore */ } }
-  const res = await fetch(DATA_URL, { cache: 'no-store' });
+  const res = await fetch(treeEncUrl(state.treeId), { cache: 'no-store' });
   if (!res.ok) throw new Error('Impossible de charger les données (' + res.status + ').');
   return res.json();
 }
 
-function hasLocalEdits() { return !!localStorage.getItem(STORAGE_KEY); }
+function hasLocalEdits() {
+  return !!localStorage.getItem(storageKey(state.treeId));
+}
+
+function currentTreeMeta() {
+  return findTreeMeta(state.trees, state.treeId);
+}
 
 // Télécharge le fichier chiffré courant (secours si la publication GitHub échoue).
 async function exportData() {
@@ -69,27 +85,30 @@ async function exportData() {
   const container = await encryptText(state.key, state.container.kdf, text);
   const blob = new Blob([JSON.stringify(container)], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
-  const a = Object.assign(document.createElement('a'), { href: url, download: 'tree.enc' });
+  const a = Object.assign(document.createElement('a'), {
+    href: url, download: `${state.treeId}.enc`,
+  });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   alert('Fichier « tree.enc » téléchargé.');
 }
 
 async function publishData() {
-  const meta = loadGithubMeta();
-  if (!meta?.owner || !meta?.repo || !hasGithubToken()) {
+  const saved = loadGithubMeta();
+  if (!saved?.owner || !saved?.repo || !hasGithubToken()) {
     openGithubSettings(() => publishData());
     return;
   }
-  if (!confirm(`Publier l'arbre sur GitHub ?\n\n${meta.owner}/${meta.repo} → ${meta.path} (${meta.branch})`)) return;
+  const path = defaultGithubPath(state.treeId);
+  if (!confirm(`Publier l'arbre sur GitHub ?\n\n${saved.owner}/${saved.repo} → ${path} (${saved.branch || 'main'})`)) return;
 
   const btn = $('#publish');
   const prev = btn?.textContent;
   if (btn) { btn.disabled = true; btn.textContent = 'Publication…'; }
   try {
     await persist();
-    await publishTree(state.key, state.container, (s) => { if (btn) btn.textContent = s; });
-    localStorage.removeItem(STORAGE_KEY);
+    await publishTree(state.key, state.container, (s) => { if (btn) btn.textContent = s; }, state.treeId);
+    localStorage.removeItem(storageKey(state.treeId));
     updateSyncStatus();
     alert('Arbre publié sur GitHub.\n\nLe site en ligne sera à jour dans quelques instants.');
   } catch (err) {
@@ -101,7 +120,13 @@ async function publishData() {
 
 function openGithubSettings(onSaved) {
   const detected = detectGithubRepo();
-  const meta = { branch: 'main', path: 'data/tree.enc', ...detected, ...loadGithubMeta() };
+  const saved = loadGithubMeta() || {};
+  const meta = {
+    owner: saved.owner || detected?.owner || '',
+    repo: saved.repo || detected?.repo || '',
+    branch: saved.branch || 'main',
+    path: defaultGithubPath(state.treeId),
+  };
   const wrap = document.createElement('div');
   wrap.className = 'modal-overlay';
   wrap.innerHTML = `
@@ -112,7 +137,7 @@ function openGithubSettings(onSaved) {
       <label>Propriétaire<input name="owner" value="${escapeHtml(meta.owner || '')}" placeholder="ex. mick111" required></label>
       <label>Dépôt<input name="repo" value="${escapeHtml(meta.repo || '')}" placeholder="ex. genealogie" required></label>
       <label>Branche<input name="branch" value="${escapeHtml(meta.branch || 'main')}"></label>
-      <label>Fichier<input name="path" value="${escapeHtml(meta.path || 'data/tree.enc')}"></label>
+      <label>Fichier<input name="path" value="${escapeHtml(meta.path || defaultGithubPath(state.treeId))}"></label>
       <label>Token GitHub (PAT)
         <input name="token" type="password" autocomplete="off"
           placeholder="${hasGithubToken() ? '••••••••  (laisser vide pour conserver)' : 'ghp_… ou github_pat_…'}"
@@ -179,7 +204,7 @@ function updateSyncStatus() {
 async function persist() {
   const text = serializeGedcom(state.individuals, state.families);
   state.container = await encryptText(state.key, state.container.kdf, text);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.container));
+  localStorage.setItem(storageKey(state.treeId), JSON.stringify(state.container));
 }
 
 // ---- modifications du modèle -----------------------------------------------
@@ -372,19 +397,60 @@ async function hydrateImages(root) {
   }
 }
 
-function renderLogin(errorMsg) {
+function renderTreePicker(errorMsg) {
   $('#app').hidden = true;
   const login = $('#login');
   login.hidden = false;
   login.innerHTML = `
+    <div class="login-card tree-picker">
+      <h1>🌳 Choisir un arbre</h1>
+      <p class="muted">Chaque arbre a son propre mot de passe.</p>
+      <div class="tree-list">
+        ${state.trees.map((t) => `
+          <button type="button" class="tree-choice" data-id="${escapeHtml(t.id)}">
+            <span class="tree-choice-name">${escapeHtml(t.name)}</span>
+            ${t.description ? `<span class="muted tree-choice-desc">${escapeHtml(t.description)}</span>` : ''}
+          </button>`).join('')}
+      </div>
+      ${errorMsg ? `<pre class="error err-detail">${escapeHtml(errorMsg)}</pre>` : ''}
+    </div>`;
+  login.querySelectorAll('.tree-choice').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setCurrentTreeId(btn.dataset.id);
+      state.treeId = btn.dataset.id;
+      migrateLegacyStorage(state.treeId);
+      state.container = null;
+      renderLogin();
+    });
+  });
+}
+
+function renderLogin(errorMsg) {
+  $('#app').hidden = true;
+  const login = $('#login');
+  login.hidden = false;
+  const meta = currentTreeMeta();
+  const canSwitch = state.trees.length > 1;
+  login.innerHTML = `
     <form id="login-form" class="login-card" autocomplete="off">
       <h1>🌳 Arbre généalogique</h1>
+      ${meta ? `<p class="muted tree-current">Arbre : <strong>${escapeHtml(meta.name)}</strong>${
+        canSwitch ? ' · <button type="button" class="link-btn" id="change-tree">Changer</button>' : ''
+      }</p>` : ''}
       <p class="muted">Accès protégé. Entrez le mot de passe.</p>
       <input type="password" id="pw" placeholder="Mot de passe" autocomplete="current-password" autofocus />
       <button type="submit">Déverrouiller</button>
       <p id="login-status" class="muted"></p>
       ${errorMsg ? `<pre class="error err-detail">${escapeHtml(errorMsg)}</pre>` : ''}
     </form>`;
+  const changeBtn = $('#change-tree');
+  if (changeBtn) changeBtn.addEventListener('click', () => {
+    sessionStorage.removeItem('gen_pass');
+    setCurrentTreeId('');
+    state.treeId = null;
+    state.container = null;
+    renderTreePicker();
+  });
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const pw = $('#pw').value;
@@ -412,8 +478,16 @@ function logout() {
   state.key = null;
   state.individuals = null;
   state.families = null;
+  state.container = null;
   location.hash = '';
   renderLogin();
+}
+
+function switchTree() {
+  logout();
+  setCurrentTreeId('');
+  state.treeId = null;
+  renderTreePicker();
 }
 
 // ------------------------------------------------------------------ shell app
@@ -423,18 +497,21 @@ function showApp() {
   app.hidden = false;
   app.innerHTML = `
     <header class="topbar">
-      <a href="#/" class="brand">🌳 Généalogie</a>
+      <a href="#/" class="brand">🌳 ${escapeHtml(currentTreeMeta()?.name || 'Généalogie')}</a>
       <form id="search-form" class="search">
         <input type="search" id="q" placeholder="Rechercher une personne…" autocomplete="off" />
       </form>
       <span id="sync-status" class="sync-badge"></span>
-      <button id="publish" class="link-btn" title="Publier data/tree.enc sur GitHub">Publier</button>
+      ${state.trees.length > 1 ? '<button id="switch-tree" class="link-btn" title="Changer d\'arbre">Arbres</button>' : ''}
+      <button id="publish" class="link-btn" title="Publier sur GitHub">Publier</button>
       <button id="github-settings" class="link-btn" title="Configurer le dépôt et le token GitHub">⚙ GitHub</button>
       <button id="export" class="link-btn" title="Télécharger tree.enc (secours)">⬇︎</button>
       <button id="logout" class="link-btn">Déconnexion</button>
     </header>
     <main id="view"></main>`;
   $('#logout').addEventListener('click', logout);
+  const switchBtn = $('#switch-tree');
+  if (switchBtn) switchBtn.addEventListener('click', switchTree);
   $('#export').addEventListener('click', exportData);
   $('#publish').addEventListener('click', publishData);
   $('#github-settings').addEventListener('click', () => openGithubSettings());
@@ -729,14 +806,31 @@ function renderInsecureContextError() {
 }
 
 async function boot() {
-  // WebCrypto (crypto.subtle) n'existe qu'en contexte sécurisé (localhost/https).
-  // En file:// il est absent -> on l'explique au lieu de rester bloqué.
   if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
     renderInsecureContextError();
     return;
   }
 
-  // Token via l'URL : #token=... (le fragment n'est jamais envoyé au serveur).
+  try {
+    state.trees = await loadTreesIndex();
+  } catch (err) {
+    renderLogin((err && err.message) || String(err));
+    return;
+  }
+
+  let treeId = getCurrentTreeId();
+  if (!treeId || !findTreeMeta(state.trees, treeId)) {
+    if (state.trees.length === 1) {
+      treeId = state.trees[0].id;
+      setCurrentTreeId(treeId);
+    } else {
+      renderTreePicker();
+      return;
+    }
+  }
+  state.treeId = treeId;
+  migrateLegacyStorage(state.treeId);
+
   const tokenMatch = /(?:^#|&)token=([^&]+)/.exec(location.hash);
   const stored = sessionStorage.getItem('gen_pass');
   const auto = tokenMatch ? decodeURIComponent(tokenMatch[1]) : stored;
@@ -744,7 +838,6 @@ async function boot() {
   if (auto) {
     try {
       await unlock(auto);
-      // Nettoie le token de l'URL après usage.
       if (tokenMatch) history.replaceState(null, '', location.pathname + '#/');
       showApp();
       return;

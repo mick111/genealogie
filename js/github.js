@@ -3,6 +3,7 @@
 // de l'arbre, puis stocké dans localStorage.
 
 import { encryptText, decryptTextWithKey } from './crypto.js';
+import { getCurrentTreeId, defaultGithubPath } from './trees.js';
 
 const META_KEY = 'gen_github_meta_v1';
 const TOKEN_KEY = 'gen_github_token_v1';
@@ -55,7 +56,7 @@ export async function saveGithubSettings(key, kdf, { owner, repo, branch, path, 
     owner: (owner || '').trim(),
     repo: (repo || '').trim(),
     branch: (branch || 'main').trim() || 'main',
-    path: (path || 'data/tree.enc').trim() || 'data/tree.enc',
+    path: (path || defaultGithubPath(getCurrentTreeId() || 'principal')).trim(),
   };
   if (!meta.owner || !meta.repo) throw new Error('OWNER_REPO');
   localStorage.setItem(META_KEY, JSON.stringify(meta));
@@ -122,9 +123,10 @@ function githubErrorMessage(err) {
   return err.message || String(err);
 }
 
-export async function publishTree(key, container, onStage = () => {}) {
-  const meta = loadGithubMeta();
-  if (!meta?.owner || !meta?.repo) throw new Error('OWNER_REPO');
+export async function publishTree(key, container, onStage = () => {}, treeId = getCurrentTreeId() || 'principal') {
+  const saved = loadGithubMeta();
+  if (!saved?.owner || !saved?.repo) throw new Error('OWNER_REPO');
+  const meta = { ...saved, path: defaultGithubPath(treeId) };
 
   onStage('Préparation…');
   const token = await getGithubToken(key);

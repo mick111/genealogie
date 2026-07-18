@@ -8,6 +8,7 @@ fichier publié est illisible sans le mot de passe, même en regardant le code s
 - Fonctionnalités : **3 vues d'arbre** (Famille/sablier, Pedigree, Éventail) avec
   choix du nombre de générations, fiches individuelles, recherche, photos.
 - **Édition** : ajouter parents / conjoint·e / enfants, modifier une fiche.
+- **Plusieurs arbres** : choix au démarrage (`trees/`), chacun avec son mot de passe.
 - Accès par **mot de passe** ou par **lien avec token**.
 
 ---
@@ -36,21 +37,23 @@ Il te faut [Node.js](https://nodejs.org) (v18+). Un seul outil chiffre le GEDCOM
 **et** les photos avec le même mot de passe :
 
 ```bash
-# Le mot de passe est demandé au clavier (ou via la variable GEN_PASSWORD)
-node tools/build.mjs mon-arbre.ged
+# Le mot de passe est demandé au clavier (ou via passwd / GEN_PASSWORD)
+node tools/build.mjs mon-arbre.ged --tree principal
 ```
 
 Cela produit :
 
-- `data/tree.enc` — le GEDCOM chiffré ;
-- `data/media/<photo>.jpg.enc` — chaque image de `data/media/` chiffrée.
+- `trees/<id>/tree.enc` — le GEDCOM chiffré ;
+- `trees/<id>/media/<photo>.jpg.enc` — chaque image chiffrée.
+
+Le catalogue des arbres est dans `trees/index.json`. L'exemple factice est dans
+`trees/exemple/` (mot de passe : `famille2024`).
 
 Ce sont ces fichiers `.enc` **qui sont publiés**. Refais cette commande à chaque
 mise à jour de ton arbre ou de tes photos. Pour changer de mot de passe, relance
 simplement le build avec le nouveau (tout est re-chiffré).
 
-> Test rapide : `node tools/verify.mjs` déchiffre et affiche un échantillon
-> (mot de passe via `passwd` à la racine, `GEN_PASSWORD`, ou défaut `famille2024` pour l'exemple).
+> Test rapide : `node tools/verify.mjs --tree principal` ou `--tree exemple`
 
 ## 3. Tester en local
 
@@ -98,7 +101,7 @@ Pour **publier / partager** tes modifications :
 
 > Astuce : pour repartir de la version publiée (annuler les modifs locales),
 > vide le stockage du site dans ton navigateur (ou exécute
-> `localStorage.removeItem('gen_data_v1')` dans la console).
+> `localStorage.removeItem('gen_data_v1_<id>')` dans la console, ex. `gen_data_v1_principal`).
 
 ## Les 3 vues d'arbre
 
@@ -142,10 +145,14 @@ js/crypto.js         déchiffrement WebCrypto
 js/gedcom.js         parseur GEDCOM
 js/tree.js           arbre ascendant SVG
 js/app.js            application (login, routing, fiches, recherche)
+js/trees.js           catalogue et chemins multi-arbres
 js/github.js         publication GitHub (token chiffré)
-data/tree.enc        GEDCOM chiffré (généré, publié)
-data/media/*.enc     photos chiffrées (générées, publiées)
-tools/build.mjs      chiffre le .ged + les photos  ->  *.enc
+data/github_token.enc  token GitHub chiffré (publié)
+data/github_meta.json  config dépôt GitHub
+trees/index.json       catalogue des arbres
+trees/<id>/tree.enc    GEDCOM chiffré (généré, publié)
+trees/<id>/media/*.enc photos chiffrées (générées, publiées)
+tools/build.mjs      chiffre le .ged + les photos  ->  trees/<id>/
 tools/verify.mjs     test local déchiffrement + parsing
 sample/famille.ged   exemple factice (mot de passe : famille2024)
 ```

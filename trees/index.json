@@ -1,0 +1,14 @@
+{
+  "trees": [
+    {
+      "id": "exemple",
+      "name": "Arbre d'exemple",
+      "description": "Famille fictive pour découvrir le site. Mot de passe : famille2024"
+    },
+    {
+      "id": "principal",
+      "name": "Arbre principal",
+      "description": "Données familiales réelles"
+    }
+  ]
+}
