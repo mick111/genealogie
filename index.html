@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arbre généalogique</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="login">
+    <!-- Message de secours si le JS ne se charge pas (ex. ouverture en file://).
+         Remplacé dès que l'application démarre. -->
+    <div class="login-card">
+      <h1>🌳 Arbre généalogique</h1>
+      <p class="error"><strong>Le site ne peut pas fonctionner en ouverture directe (double-clic).</strong></p>
+      <p class="muted">Ouvre-le via <code>http://localhost</code> :
+      double-clique sur <code>start.command</code>, ou lance en terminal
+      <code>python3 -m http.server 8000</code> puis va sur <code>http://localhost:8000</code>.
+      Une fois publié sur GitHub Pages (<code>https://</code>), il fonctionnera directement.</p>
+    </div>
+  </div>
+  <div id="app" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

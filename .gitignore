@@ -1,0 +1,15 @@
+# Ne jamais committer de GEDCOM en clair (données familiales réelles)…
+*.ged
+# …sauf l'exemple factice.
+!sample/famille.ged
+
+# Photos en clair : ne jamais publier (seules les .enc le sont)
+data/media/*.jpg
+data/media/*.jpeg
+data/media/*.png
+data/media/*.gif
+data/media/*.webp
+
+# Fichiers système
+.DS_Store
+node_modules/
