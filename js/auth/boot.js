@@ -7,7 +7,12 @@ import {
   loadRegistry, saveRegistry, loadPending, savePending, appendPending,
   findBootstrapAdmin, findUserByCredential, ROLES, ROLE_LABELS,
 } from './registry.js';
-import { authSession, setAuthSession, clearAuthSession, isAdmin } from './session.js';
+import { authSession, setAuthSession, clearAuthSession, isAdmin, needsSetupFinalize } from './session.js';
+import {
+  createSetupKeyPair, storeSetupPrivateKey, loadSetupPrivateKey, clearSetupPrivateKey,
+  hasLocalSetupForUser, wrapMkForSetup, unwrapMkFromSetup,
+} from './setup-handoff.js';
+import { importRawAesKey } from '../crypto.js';
 import { decryptTreeContainer, isMkTree } from './tree-lock.js';
 import { githubErrorMessage } from '../github.js';
 
@@ -67,6 +72,34 @@ export async function unlockMkForUser(user, pin) {
   return mkKey;
 }
 
+async function finalizeUserAccount(user, pin, registry, onUnlocked, statusEl) {
+  const setupPk = loadSetupPrivateKey(user.id);
+  if (!setupPk) {
+    throw new Error('Clé de finalisation introuvable — utilisez le même appareil et navigateur que lors de l\'inscription.');
+  }
+  if (statusEl) statusEl.textContent = 'Déverrouillage…';
+  const mkRaw = await unwrapMkFromSetup(user.setupWrap, setupPk);
+  const mkKey = await importRawAesKey(mkRaw);
+  user.pinWrap = await wrapMkRawWithPin(mkRaw, user.id, pin);
+  if (statusEl) statusEl.textContent = 'Activation passkey…';
+  user = await ensurePrfWrap(user, mkRaw, registry);
+  const idx = registry.users.findIndex((u) => u.id === user.id);
+  if (idx < 0) throw new Error('Utilisateur introuvable.');
+  registry.users[idx] = {
+    ...registry.users[idx],
+    pinWrap: user.pinWrap,
+    ...(user.prfWrap ? { prfWrap: user.prfWrap } : {}),
+    setupRequired: false,
+  };
+  delete registry.users[idx].setupWrap;
+  if (statusEl) statusEl.textContent = 'Publication…';
+  await saveRegistry(registry);
+  clearSetupPrivateKey(user.id);
+  setAuthSession(registry.users[idx], mkKey, registry, mkRaw);
+  if (statusEl) statusEl.textContent = 'Compte activé.';
+  await onUnlocked(mkKey);
+}
+
 export function renderAuthGate(escapeHtml, onUnlocked) {
   $('#app').hidden = true;
   const login = $('#login');
@@ -74,18 +107,102 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
 
   const show = (html) => { login.innerHTML = html; };
 
-  const screenHome = () => {
+  const showAuthError = (err) => {
+    show(`
+      <div class="login-card">
+        <p class="error">${escapeHtml(err?.message || String(err))}</p>
+        <button type="button" class="link-btn" id="back-err">← Retour</button>
+      </div>`);
+    $('#back-err').addEventListener('click', screenHomeSync);
+  };
+
+  const screenHome = async () => {
+    const registry = await loadRegistry();
+    const canFinalize = registry.users.some(
+      (u) => needsSetupFinalize(u) && hasLocalSetupForUser(u.id),
+    );
     show(`
       <div class="login-card">
         <h1>🌳 Généalogie</h1>
         <p class="muted">Connexion sécurisée par passkey.</p>
-        <button type="button" class="btn" id="btn-login" style="width:100%;margin-top:1rem">Se connecter</button>
+        ${canFinalize ? `<button type="button" class="btn" id="btn-finalize" style="width:100%;margin-top:1rem">Finaliser mon compte</button>` : ''}
+        <button type="button" class="btn" id="btn-login" style="width:100%;margin-top:${canFinalize ? '.6' : '1'}rem">Se connecter</button>
         <button type="button" class="link-btn" id="btn-register" style="width:100%;margin-top:.6rem">Créer un compte</button>
         <p id="auth-status" class="muted" style="margin-top:1rem"></p>
       </div>`);
+    $('#btn-finalize')?.addEventListener('click', screenFinalizeSetup);
     $('#btn-login').addEventListener('click', screenLogin);
     $('#btn-register').addEventListener('click', screenRegister);
   };
+
+  const screenFinalizeSetup = async () => {
+    const registry = await loadRegistry();
+    const candidates = registry.users.filter(
+      (u) => needsSetupFinalize(u) && hasLocalSetupForUser(u.id),
+    );
+    if (!candidates.length) {
+      show(`
+        <div class="login-card">
+          <h1>Finaliser mon compte</h1>
+          <p class="error">Aucun compte en attente de finalisation sur cet appareil.</p>
+          <p class="muted">Revenez sur le navigateur où vous vous êtes inscrit, ou créez une nouvelle demande.</p>
+          <button type="button" class="link-btn" id="back" style="margin-top:.8rem">← Retour</button>
+        </div>`);
+      $('#back').addEventListener('click', screenHomeSync);
+      return;
+    }
+    show(`
+      <div class="login-card">
+        <h1>Finaliser mon compte</h1>
+        <p class="muted">Votre compte a été approuvé. Choisissez votre PIN secours (8 chiffres) — seul vous le connaîtrez.</p>
+        <button type="button" class="btn" id="btn-finalize-passkey" style="width:100%">Vérifier ma passkey</button>
+        <form id="finalize-form" hidden style="margin-top:1rem">
+          <label>PIN secours (8 chiffres)<input name="pin" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required></label>
+          <label>Confirmer le PIN<input name="pin2" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required></label>
+          <button type="submit" class="btn" style="width:100%;margin-top:.8rem">Activer mon compte</button>
+        </form>
+        <button type="button" class="link-btn" id="back" style="margin-top:.6rem">← Retour</button>
+        <p id="auth-status" class="muted"></p>
+      </div>`);
+    $('#back').addEventListener('click', screenHomeSync);
+    let matchedUser = null;
+    $('#btn-finalize-passkey').addEventListener('click', async () => {
+      const status = $('#auth-status');
+      const btn = $('#btn-finalize-passkey');
+      btn.disabled = true;
+      status.textContent = 'Passkey…';
+      try {
+        const auth = await authenticatePasskey(null, candidates.map((u) => u.credentialId));
+        matchedUser = candidates.find((u) => u.credentialId === auth.credentialId);
+        if (!matchedUser) throw new Error('Passkey non reconnue.');
+        status.textContent = `Compte : ${matchedUser.displayName}`;
+        $('#finalize-form').hidden = false;
+      } catch (err) {
+        status.innerHTML = `<span class="error">${escapeHtml(err.message || String(err))}</span>`;
+        btn.disabled = false;
+      }
+    });
+    $('#finalize-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const pin = fd.get('pin');
+      const pin2 = fd.get('pin2');
+      const status = $('#auth-status');
+      if (!matchedUser) { status.textContent = 'Vérifiez d\'abord votre passkey.'; return; }
+      if (!validatePin(pin)) { status.textContent = 'PIN : 8 chiffres requis.'; return; }
+      if (pin !== pin2) { status.textContent = 'Les PIN ne correspondent pas.'; return; }
+      const btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      try {
+        await finalizeUserAccount(matchedUser, pin, registry, onUnlocked, status);
+      } catch (err) {
+        status.innerHTML = `<span class="error">${escapeHtml(githubErrorMessage(err) || err.message || String(err))}</span>`;
+        btn.disabled = false;
+      }
+    });
+  };
+
+  const screenHomeSync = () => { screenHome().catch(showAuthError); };
 
   const screenLogin = async () => {
     const registry = await loadRegistry();
@@ -104,7 +221,7 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
         <button type="button" class="link-btn" id="back" style="margin-top:.6rem">← Retour</button>
         <p id="auth-status" class="muted"></p>
       </div>`);
-    $('#back').addEventListener('click', screenHome);
+    $('#back').addEventListener('click', screenHomeSync);
     const passkeyBtn = $('#btn-passkey');
     if (passkeyBtn) {
       passkeyBtn.addEventListener('click', async () => {
@@ -158,43 +275,43 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
     show(`
       <form id="reg-form" class="login-card">
         <h1>Créer un compte</h1>
-        <p class="muted">Votre demande sera envoyée automatiquement à l'administrateur.</p>
+        <p class="muted">Créez votre passkey. Après validation par l'administrateur, vous choisirez votre PIN secours sur <strong>ce même appareil</strong>.</p>
         <label>Votre prénom / nom<input name="displayName" required autofocus></label>
-        <label>PIN secours (8 chiffres)<input name="pin" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required></label>
         <button type="submit" class="btn" style="width:100%;margin-top:.8rem">Créer passkey et envoyer</button>
         <button type="button" class="link-btn" id="back" style="margin-top:.6rem">← Retour</button>
         <p id="auth-status" class="muted"></p>
       </form>`);
-    $('#back').addEventListener('click', screenHome);
+    $('#back').addEventListener('click', screenHomeSync);
     $('#reg-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       const displayName = fd.get('displayName').trim();
-      const pin = fd.get('pin');
       const status = $('#auth-status');
       const btn = e.target.querySelector('button[type=submit]');
-      if (!validatePin(pin)) { status.textContent = 'PIN : 8 chiffres requis.'; return; }
+      if (!displayName) { status.textContent = 'Nom requis.'; return; }
       btn.disabled = true;
       status.textContent = 'Création passkey…';
       try {
+        const setupKeys = await createSetupKeyPair();
         const reg = await registerPasskey(displayName);
+        storeSetupPrivateKey(reg.userId, setupKeys.privateKeyB64);
         status.textContent = 'Envoi de la demande sur GitHub…';
         await appendPending({
           id: reg.userId,
           displayName: reg.displayName,
           credentialId: reg.credentialId,
           publicKey: reg.publicKey,
-          pinHint: true,
+          setupPublicKey: setupKeys.publicKeyB64,
           createdAt: new Date().toISOString(),
           status: 'pending',
         });
         show(`
           <div class="login-card">
             <h1>Demande envoyée</h1>
-            <p class="muted">Un administrateur validera votre compte. Revenez après validation pour vous connecter.</p>
+            <p class="muted">Un administrateur validera votre compte. Revenez ensuite sur <strong>ce navigateur</strong> et cliquez « Finaliser mon compte » pour choisir votre PIN secours.</p>
             <button type="button" class="btn" id="ok" style="width:100%;margin-top:1rem">OK</button>
           </div>`);
-        $('#ok').addEventListener('click', screenHome);
+        $('#ok').addEventListener('click', screenHomeSync);
       } catch (err) {
         status.innerHTML = `<span class="error">${escapeHtml(githubErrorMessage(err) || err.message)}</span>`;
         btn.disabled = false;
@@ -229,7 +346,7 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
     });
   };
 
-  screenHome();
+  screenHomeSync();
 }
 
 async function saveUserPasskey(user, mkRaw) {
@@ -266,6 +383,7 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
       <p class="muted">Rôles : <strong>Lecture seule</strong> — consulter l'arbre ;
       <strong>Sa fiche uniquement</strong> — modifier sa propre personne (après lien dans l'arbre) ;
       <strong>Éditeur</strong> — modifier tout l'arbre et publier sur GitHub.</p>
+      <p class="muted">Après approbation, la personne finalise son PIN secours sur son appareil (sans que vous le connaissiez).</p>
       <p class="muted">${pending.length} demande(s) en attente.</p>
       ${pending.length ? pending.map((p) => `
         <div class="mini-card" style="margin-bottom:.8rem;min-width:100%">
@@ -316,27 +434,36 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
       const doc = await loadPending();
       const req = doc.pending.find((p) => p.id === id);
       if (!req) return;
-      const pin = window.prompt(`PIN secours (8 chiffres) choisi par ${req.displayName} lors de l'inscription :`);
-      if (!pin || !validatePin(pin)) { alert('PIN invalide (8 chiffres).'); return; }
+      if (!req.setupPublicKey) {
+        alert('Demande obsolète — demandez à la personne de s\'inscrire à nouveau.');
+        return;
+      }
       const registry = await loadRegistry();
       if (!authSession.mkRaw) { alert('Session expirée — reconnectez-vous.'); return; }
-      const pinWrap = await wrapMkRawWithPin(authSession.mkRaw, req.id, pin);
-      registry.users.push({
-        id: req.id,
-        displayName: req.displayName,
-        credentialId: req.credentialId,
-        publicKey: req.publicKey,
-        role,
-        status: 'approved',
-        personId: null,
-        pinWrap,
-        createdAt: new Date().toISOString(),
-      });
-      doc.pending = doc.pending.filter((p) => p.id !== id);
-      await saveRegistry(registry);
-      await savePending(doc);
-      alert('Compte approuvé et publié.');
-      renderAdminPanel(view, escapeHtml, state, persist);
+      btn.disabled = true;
+      try {
+        const setupWrap = await wrapMkForSetup(authSession.mkRaw, req.setupPublicKey);
+        registry.users.push({
+          id: req.id,
+          displayName: req.displayName,
+          credentialId: req.credentialId,
+          publicKey: req.publicKey,
+          role,
+          status: 'approved',
+          personId: null,
+          setupRequired: true,
+          setupWrap,
+          createdAt: new Date().toISOString(),
+        });
+        doc.pending = doc.pending.filter((p) => p.id !== id);
+        await saveRegistry(registry);
+        await savePending(doc);
+        alert('Compte approuvé. La personne peut finaliser son PIN sur son appareil.');
+        renderAdminPanel(view, escapeHtml, state, persist);
+      } catch (err) {
+        alert(githubErrorMessage(err) || err.message || String(err));
+        btn.disabled = false;
+      }
     });
   });
 

@@ -53,3 +53,7 @@ export function needsPersonLink() {
   const u = authSession.user;
   return u && u.status === 'approved' && !u.personId && (u.role === 'self' || u.role === 'editor');
 }
+
+export function needsSetupFinalize(user) {
+  return !!(user?.status === 'approved' && user.setupRequired && user.setupWrap && !user.pinWrap);
+}

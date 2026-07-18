@@ -109,11 +109,11 @@ clé (jamais la clé en clair sur GitHub).
 
 **Inscription d'un membre :**
 
-1. La personne clique **Créer un compte**, choisit un nom et un PIN secours, crée sa passkey.
+1. La personne clique **Créer un compte**, crée sa passkey (sans PIN pour l'instant).
 2. La demande part **automatiquement** sur GitHub (`data/auth/pending.json`).
-3. L'administrateur ouvre `#/admin`, saisit le **PIN choisi par la personne**
-   (communiqué de vive voix ou par un canal sûr), choisit un **rôle** et approuve.
-4. Le compte apparaît dans `data/auth/registry.json` ; la personne peut se connecter.
+3. L'administrateur ouvre `#/admin`, choisit un **rôle** et approuve — **sans connaître le PIN**.
+4. La personne revient sur **le même appareil / navigateur**, clique **Finaliser mon compte**, vérifie sa passkey et choisit son **PIN secours** (8 chiffres).
+5. Le compte apparaît dans `data/auth/registry.json` ; connexion passkey ou PIN ensuite.
 
 **Rôles :**
 
