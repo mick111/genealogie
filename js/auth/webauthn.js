@@ -7,9 +7,16 @@ function uid() {
   return crypto.randomUUID();
 }
 
+function toBytes(buf) {
+  if (buf instanceof Uint8Array) return buf;
+  if (buf instanceof ArrayBuffer) return new Uint8Array(buf);
+  return new Uint8Array(buf);
+}
+
 function b64(buf) {
+  const bytes = toBytes(buf);
   let s = '';
-  for (const b of buf) s += String.fromCharCode(b);
+  for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s);
 }
 
@@ -25,7 +32,7 @@ function prfSalt(userId) {
 }
 
 export function credentialIdB64(credential) {
-  return b64(new Uint8Array(credential.rawId));
+  return b64(credential.rawId);
 }
 
 export async function registerPasskey(displayName, userId = uid()) {
