@@ -88,3 +88,33 @@ export async function decryptTextWithKey(key, container) {
   const buf = await decryptRaw(key, container.iv, container.ct);
   return new TextDecoder().decode(buf);
 }
+
+// --- clé AES brute (256 bits) pour la clé maître MK ----------------------------
+
+export async function importRawAesKey(rawBytes) {
+  return crypto.subtle.importKey('raw', rawBytes, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+export async function exportRawAesKey(key) {
+  return new Uint8Array(await crypto.subtle.exportKey('raw', key));
+}
+
+export async function encryptBytesWithKey(key, bytes) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const buf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes);
+  return { v: 1, cipher: 'AES-GCM', iv: bytesToB64(iv), ct: bytesToB64(new Uint8Array(buf)) };
+}
+
+export async function decryptBytesWithContainer(key, container) {
+  const buf = await decryptRaw(key, container.iv, container.ct);
+  return new Uint8Array(buf);
+}
+
+export async function encryptJsonWithKey(key, obj) {
+  return encryptBytesWithKey(key, new TextEncoder().encode(JSON.stringify(obj)));
+}
+
+export async function decryptJsonWithKey(key, container) {
+  const bytes = await decryptBytesWithContainer(key, container);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}

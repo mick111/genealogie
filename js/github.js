@@ -82,6 +82,13 @@ async function getGithubToken(key) {
   }
 }
 
+// Token admin déchiffré avec la clé maître MK (auth passkey).
+export async function getGithubTokenFromMk() {
+  const { authSession } = await import('./auth/session.js');
+  if (!authSession.mkKey) throw new Error('NO_TOKEN');
+  return getGithubToken(authSession.mkKey);
+}
+
 function utf8ToB64(text) {
   const bytes = new TextEncoder().encode(text);
   let bin = '';
@@ -116,6 +123,9 @@ async function ghFetch(path, token, opts = {}) {
 function githubErrorMessage(err) {
   if (err.message === 'NO_TOKEN') return 'Aucun token GitHub enregistré. Configure la publication.';
   if (err.message === 'BAD_TOKEN') return 'Token GitHub illisible (mot de passe changé ?). Reconfigure-le.';
+  if (err.message === 'REG_TOKEN_MISSING') return 'Token d\'inscription absent (data/github_reg_token.enc).';
+  if (err.message === 'GITHUB_META') return 'Configuration GitHub absente (data/github_meta.json).';
+  if (err.message === 'ALREADY_PENDING') return 'Une demande est déjà en cours pour cette passkey.';
   if (err.message === 'OWNER_REPO') return 'Indique le dépôt GitHub (propriétaire et nom).';
   if (err.status === 401) return 'Token GitHub refusé (expiré ou invalide).';
   if (err.status === 403) return 'Accès refusé : le token doit autoriser l\'écriture sur le dépôt (scope « repo » ou « Contents : Read and write »).';
@@ -127,38 +137,42 @@ export async function publishTree(key, container, onStage = () => {}, treeId = g
   const saved = loadGithubMeta();
   if (!saved?.owner || !saved?.repo) throw new Error('OWNER_REPO');
   const meta = { ...saved, path: defaultGithubPath(treeId) };
-
   onStage('Préparation…');
   const token = await getGithubToken(key);
-  const pathEnc = encodeURIComponent(meta.path).replace(/%2F/g, '/');
-  const refQ = `?ref=${encodeURIComponent(meta.branch)}`;
+  onStage('Envoi vers GitHub…');
+  await publishFile(meta.owner, meta.repo, meta.path, meta.branch, token,
+    JSON.stringify(container), 'Mise à jour arbre généalogique', onStage);
+  onStage('Terminé.');
+}
 
+export async function publishFile(owner, repo, path, branch, token, content, message, onStage = () => {}) {
+  const pathEnc = encodeURIComponent(path).replace(/%2F/g, '/');
+  const refQ = `?ref=${encodeURIComponent(branch)}`;
   onStage('Lecture du fichier distant…');
   let sha;
   try {
-    const existing = await ghFetch(
-      `/repos/${meta.owner}/${meta.repo}/contents/${pathEnc}${refQ}`,
-      token
-    );
+    const existing = await ghFetch(`/repos/${owner}/${repo}/contents/${pathEnc}${refQ}`, token);
     sha = existing.sha;
   } catch (err) {
     if (err.status !== 404) throw err;
   }
-
   onStage('Envoi vers GitHub…');
-  const content = JSON.stringify(container);
-  await ghFetch(`/repos/${meta.owner}/${meta.repo}/contents/${pathEnc}`, token, {
+  await ghFetch(`/repos/${owner}/${repo}/contents/${pathEnc}`, token, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      message: 'Mise à jour arbre généalogique',
+      message,
       content: utf8ToB64(content),
-      branch: meta.branch,
+      branch,
       ...(sha ? { sha } : {}),
     }),
   });
-
-  onStage('Terminé.');
 }
 
-export { githubErrorMessage };
+export async function fetchTextFile(path) {
+  const res = await fetch(path, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Fichier introuvable : ${path} (${res.status})`);
+  return res.text();
+}
+
+export { githubErrorMessage, ghFetch, utf8ToB64 };

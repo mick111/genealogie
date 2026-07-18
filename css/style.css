@@ -212,6 +212,25 @@ main { max-width: 900px; margin: 0 auto; padding: 1rem; }
   display: block; width: 100%; margin-top: .2rem; padding: .5rem .6rem;
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--ink); font-size: .95rem;
 }
+.date-row {
+  display: flex; gap: .35rem; align-items: center; margin-top: .2rem; flex-wrap: wrap;
+}
+.date-row input[type="number"] {
+  width: 4.2rem; flex-shrink: 0; margin-top: 0;
+}
+.date-row input[name$="Year"] { width: 5.5rem; }
+.date-row select { flex: 1; min-width: 6.5rem; margin-top: 0; }
+.date-cal-btn {
+  flex-shrink: 0; width: 2.5rem; height: 2.5rem; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--ink);
+  cursor: pointer; font-size: 1.15rem; line-height: 1; padding: 0;
+}
+.date-cal-btn:hover { border-color: var(--accent); background: var(--panel); }
+.date-cal-native {
+  position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap;
+}
+.date-hint { display: block; font-size: .78rem; margin-top: .3rem; line-height: 1.35; }
 .modal-actions { display: flex; justify-content: flex-end; gap: .8rem; align-items: center; margin-top: 1rem; }
 
 .rel-block { margin-top: 1.4rem; }

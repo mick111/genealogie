@@ -78,6 +78,20 @@ function parseEvent(node) {
   return ev;
 }
 
+// GEDCOM peut répéter BIRT/DEAT (ex. Filae : 1re balise vide, 2e avec DATE).
+function parseBestEvent(nodes) {
+  if (!nodes.length) return null;
+  for (const node of nodes) {
+    const ev = parseEvent(node);
+    if (ev?.date) return ev;
+  }
+  for (const node of nodes) {
+    const ev = parseEvent(node);
+    if (ev) return ev;
+  }
+  return null;
+}
+
 // Récupère les fichiers média rattachés à un individu (inline OBJE ou pointeur).
 function collectMedia(node, objects) {
   const files = [];
@@ -125,8 +139,8 @@ export function parseGedcom(text) {
         given: name.given,
         surname: name.surname,
         sex: sex ? sex.value.trim().toUpperCase() : '',
-        birth: parseEvent(child(rec, 'BIRT')),
-        death: parseEvent(child(rec, 'DEAT')),
+        birth: parseBestEvent(children(rec, 'BIRT')),
+        death: parseBestEvent(children(rec, 'DEAT')),
         famc: children(rec, 'FAMC').map((c) => c.value.trim()), // familles où enfant
         fams: children(rec, 'FAMS').map((c) => c.value.trim()), // familles où époux
         media: collectMedia(rec, objects),
@@ -139,8 +153,8 @@ export function parseGedcom(text) {
         husb: husb ? husb.value.trim() : null,
         wife: wife ? wife.value.trim() : null,
         chil: children(rec, 'CHIL').map((c) => c.value.trim()),
-        marr: parseEvent(child(rec, 'MARR')),
-        div: parseEvent(child(rec, 'DIV')),
+        marr: parseBestEvent(children(rec, 'MARR')),
+        div: parseBestEvent(children(rec, 'DIV')),
       });
     }
   }
@@ -153,6 +167,11 @@ const MONTHS = {
   JAN: 'janv.', FEB: 'févr.', MAR: 'mars', APR: 'avr.', MAY: 'mai', JUN: 'juin',
   JUL: 'juil.', AUG: 'août', SEP: 'sept.', OCT: 'oct.', NOV: 'nov.', DEC: 'déc.',
 };
+const MONTH_NUM = {
+  JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06',
+  JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12',
+};
+const NUM_MONTH = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 const QUALIFIERS = { ABT: 'vers', EST: 'vers', CAL: 'vers', BEF: 'avant', AFT: 'après' };
 
 export function formatDate(gedDate) {
@@ -165,6 +184,81 @@ export function formatDate(gedDate) {
     s = s.slice(q[0].length);
   }
   return prefix + s.replace(/\b([A-Z]{3})\b/g, (mm, mon) => MONTHS[mon] || mon);
+}
+
+// Convertit une date GEDCOM (ex. « 12 MAR 1980 ») vers YYYY-MM-DD pour <input type="date">.
+export function gedcomToInputDate(gedDate) {
+  if (!gedDate) return '';
+  let s = gedDate.trim().replace(/^(ABT|EST|CAL|BEF|AFT)\s+/i, '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const dmy = /^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{3,4})$/.exec(s);
+  if (dmy) {
+    const mon = MONTH_NUM[dmy[2].toUpperCase()];
+    if (mon) return `${dmy[3]}-${mon}-${dmy[1].padStart(2, '0')}`;
+  }
+  return '';
+}
+
+// Convertit YYYY-MM-DD (calendrier) vers une date GEDCOM standard.
+export function inputDateToGedcom(isoDate) {
+  if (!isoDate) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate.trim());
+  if (!m) return isoDate.trim();
+  const day = String(parseInt(m[3], 10));
+  const mon = NUM_MONTH[parseInt(m[2], 10) - 1];
+  return mon ? `${day} ${mon} ${m[1]}` : isoDate.trim();
+}
+
+// Décompose une date GEDCOM en parties éditables (jour, mois, année, qualificateur).
+export function parseGedcomDateParts(gedDate) {
+  const empty = { qualifier: '', day: '', month: '', year: '', unparsed: '' };
+  if (!gedDate) return empty;
+  let s = gedDate.trim();
+  let qualifier = '';
+  const q = /^(ABT|EST|CAL|BEF|AFT)\s+/i.exec(s);
+  if (q) {
+    qualifier = q[1].toUpperCase();
+    s = s.slice(q[0].length).trim();
+  }
+  let m = /^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{3,4})$/.exec(s);
+  if (m) {
+    return { qualifier, day: String(parseInt(m[1], 10)), month: MONTH_NUM[m[2].toUpperCase()] || '', year: m[3], unparsed: '' };
+  }
+  m = /^([A-Za-z]{3})\s+(\d{3,4})$/.exec(s);
+  if (m) {
+    return { qualifier, day: '', month: MONTH_NUM[m[1].toUpperCase()] || '', year: m[2], unparsed: '' };
+  }
+  if (/^\d{3,4}$/.test(s)) return { qualifier, day: '', month: '', year: s, unparsed: '' };
+  m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (m) {
+    return { qualifier, day: String(parseInt(m[3], 10)), month: m[2], year: m[1], unparsed: '' };
+  }
+  return { qualifier, day: '', month: '', year: '', unparsed: gedDate.trim() };
+}
+
+// Recompose une date GEDCOM à partir des champs du formulaire.
+export function partsToGedcom({ qualifier = '', day = '', month = '', year = '' }) {
+  const q = qualifier ? qualifier + ' ' : '';
+  const y = String(year ?? '').trim();
+  const mo = String(month ?? '').trim();
+  const d = String(day ?? '').trim();
+  const mon = mo ? NUM_MONTH[parseInt(mo, 10) - 1] : '';
+  if (d && mon && y) return `${q}${parseInt(d, 10)} ${mon} ${y}`.trim();
+  if (mon && y) return `${q}${mon} ${y}`.trim();
+  if (y) return `${q}${y}`.trim();
+  return '';
+}
+
+// Fusionne la saisie formulaire et l'original (préserve qualificateur et dates non parsées).
+export function mergeDatePartsFormValue(day, month, year, originalGed) {
+  const orig = parseGedcomDateParts(originalGed);
+  const built = partsToGedcom({ qualifier: orig.qualifier, day, month, year });
+  if (built) return built;
+  if (!String(day ?? '').trim() && !String(month ?? '').trim() && !String(year ?? '').trim()) {
+    if (orig.unparsed) return originalGed.trim();
+    return '';
+  }
+  return '';
 }
 
 // Sérialise les Maps individuals/families en texte GEDCOM (pour ré-export).

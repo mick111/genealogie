@@ -1,18 +1,24 @@
 // app.js — application principale : login chiffré, routing, fiches, recherche.
 
 import { decryptTextContainer, decryptBytesWithKey, encryptText } from './crypto.js';
-import { parseGedcom, serializeGedcom, formatDate, yearOf } from './gedcom.js';
+import { parseGedcom, serializeGedcom, formatDate, yearOf, parseGedcomDateParts, mergeDatePartsFormValue } from './gedcom.js';
 import { renderTree } from './tree.js';
 import {
   detectGithubRepo, loadGithubMeta, hasGithubToken, saveGithubSettings,
   clearGithubSettings, publishTree, githubErrorMessage, loadBundledGithubConfig,
 } from './github.js';
 import {
+  authModeAvailable, renderAuthGate, renderAdminPanel, renderPersonLink,
+  clearAuthSession, decryptTreeContainer, isMkTree,
+} from './auth/boot.js';
+import { authSession, canEditPerson, canEditTree, canPublish, needsPersonLink, isAdmin } from './auth/session.js';
+import {
   loadTreesIndex, getCurrentTreeId, setCurrentTreeId, findTreeMeta,
   treeEncUrl, treeMediaDir, storageKey, defaultGithubPath,
 } from './trees.js';
 
 const MAX_GEN = 4; // générations affichées dans l'arbre ascendant
+let authMode = false;
 
 const state = {
   trees: null,          // catalogue depuis trees/index.json
@@ -203,7 +209,12 @@ function updateSyncStatus() {
 // Re-sérialise + re-chiffre les données et les enregistre en local (localStorage).
 async function persist() {
   const text = serializeGedcom(state.individuals, state.families);
-  state.container = await encryptText(state.key, state.container.kdf, text);
+  if (isMkTree(state.container) || authSession.mkKey) {
+    const { encryptTreeContainer } = await import('./auth/tree-lock.js');
+    state.container = await encryptTreeContainer(state.key, text);
+  } else {
+    state.container = await encryptText(state.key, state.container.kdf, text);
+  }
   localStorage.setItem(storageKey(state.treeId), JSON.stringify(state.container));
 }
 
@@ -306,6 +317,66 @@ function deletePerson(id) {
   }
 }
 
+const MONTH_LABELS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+
+function monthSelectOptions(selected) {
+  let html = '<option value="">Mois</option>';
+  for (let i = 0; i < 12; i++) {
+    const v = String(i + 1).padStart(2, '0');
+    html += `<option value="${v}"${selected === v ? ' selected' : ''}>${MONTH_LABELS[i]}</option>`;
+  }
+  return html;
+}
+
+function dateFieldHint(gedDate) {
+  const p = parseGedcomDateParts(gedDate);
+  if (!p.unparsed) return '';
+  return `<span class="date-hint muted">Enregistré : ${escapeHtml(formatDate(gedDate))} — format non éditable ici ; remplis les champs pour la remplacer.</span>`;
+}
+
+function dateFields(label, prefix, gedDate) {
+  const p = parseGedcomDateParts(gedDate || '');
+  return `<label class="date-label">${label}
+        <div class="date-row">
+          <input type="number" name="${prefix}Day" min="1" max="31" step="1" placeholder="Jour"
+            value="${escapeHtml(p.day)}" aria-label="Jour">
+          <select name="${prefix}Month" aria-label="Mois">${monthSelectOptions(p.month)}</select>
+          <input type="number" name="${prefix}Year" min="1" max="9999" step="1" placeholder="Année"
+            value="${escapeHtml(p.year)}" aria-label="Année">
+          <button type="button" class="date-cal-btn" data-date-group="${prefix}" title="Calendrier" aria-label="Ouvrir le calendrier">📅</button>
+          <input type="date" class="date-cal-native" data-date-group="${prefix}" tabindex="-1" aria-hidden="true">
+        </div>
+        ${dateFieldHint(gedDate)}
+      </label>`;
+}
+
+function wireDatePickers(form) {
+  form.querySelectorAll('.date-cal-btn').forEach((btn) => {
+    const prefix = btn.dataset.dateGroup;
+    const native = form.querySelector(`.date-cal-native[data-date-group="${prefix}"]`);
+    const dayEl = form.querySelector(`[name="${prefix}Day"]`);
+    const monthEl = form.querySelector(`[name="${prefix}Month"]`);
+    const yearEl = form.querySelector(`[name="${prefix}Year"]`);
+    btn.addEventListener('click', () => {
+      const y = yearEl.value.trim();
+      const m = monthEl.value;
+      const d = dayEl.value.trim();
+      if (y && m && d) native.value = `${y}-${m}-${String(d).padStart(2, '0')}`;
+      else if (y && m) native.value = `${y}-${m}-01`;
+      else native.value = '';
+      if (native.showPicker) native.showPicker();
+      else { native.focus(); native.click(); }
+    });
+    native.addEventListener('change', () => {
+      if (!native.value) return;
+      const [y, m, d] = native.value.split('-');
+      yearEl.value = y;
+      monthEl.value = m;
+      dayEl.value = String(parseInt(d, 10));
+    });
+  });
+}
+
 // ---- modale d'édition ------------------------------------------------------
 function openForm(title, initial, onSubmit, extraHtml = '') {
   const i = initial || {};
@@ -324,9 +395,9 @@ function openForm(title, initial, onSubmit, extraHtml = '') {
           <option value="F"${i.sex === 'F' ? ' selected' : ''}>Femme</option>
         </select>
       </label>
-      <label>Naissance (date)<input name="birthDate" value="${escapeHtml(i.birthDate || '')}" placeholder="ex. 12 MAR 1980 ou 1980"></label>
+      ${dateFields('Naissance', 'birth', i.birthDate)}
       <label>Naissance (lieu)<input name="birthPlace" value="${escapeHtml(i.birthPlace || '')}"></label>
-      <label>Décès (date)<input name="deathDate" value="${escapeHtml(i.deathDate || '')}" placeholder="laisser vide si vivant"></label>
+      ${dateFields('Décès', 'death', i.deathDate)}
       <label>Décès (lieu)<input name="deathPlace" value="${escapeHtml(i.deathPlace || '')}"></label>
       <div class="modal-actions">
         <button type="button" class="link-btn" data-cancel>Annuler</button>
@@ -337,10 +408,15 @@ function openForm(title, initial, onSubmit, extraHtml = '') {
   const close = () => wrap.remove();
   wrap.querySelector('[data-cancel]').addEventListener('click', close);
   wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+  wireDatePickers(wrap.querySelector('form'));
   wrap.querySelector('form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const data = Object.fromEntries(fd.entries());
+    data.birthDate = mergeDatePartsFormValue(data.birthDay, data.birthMonth, data.birthYear, i.birthDate);
+    data.deathDate = mergeDatePartsFormValue(data.deathDay, data.deathMonth, data.deathYear, i.deathDate);
+    delete data.birthDay; delete data.birthMonth; delete data.birthYear;
+    delete data.deathDay; delete data.deathMonth; delete data.deathYear;
     close();
     await onSubmit(data);
   });
@@ -359,17 +435,31 @@ async function applyEdit(fn, goId) {
 async function unlock(passphrase, onStage = () => {}) {
   onStage('Chargement du fichier chiffré…');
   if (!state.container) state.container = await loadContainer();
-  onStage('Dérivation de la clé + déchiffrement…');
-  const { key, text } = await decryptTextContainer(state.container, passphrase);
+  let text;
+  if (isMkTree(state.container) && authSession.mkKey) {
+    onStage('Déchiffrement (clé maître)…');
+    text = await decryptTreeContainer(authSession.mkKey, state.container);
+    state.key = authSession.mkKey;
+  } else {
+    onStage('Dérivation de la clé + déchiffrement…');
+    const res = await decryptTextContainer(state.container, passphrase);
+    text = res.text;
+    state.key = res.key;
+  }
   onStage('Analyse du GEDCOM…');
   const { individuals, families } = parseGedcom(text);
   if (!individuals.size) throw new Error('EMPTY');
-  state.key = key;
   state.individuals = individuals;
   state.families = families;
   await loadBundledGithubConfig();
-  sessionStorage.setItem('gen_pass', passphrase);
+  if (!authSession.mkKey) sessionStorage.setItem('gen_pass', passphrase);
   onStage('Terminé.');
+}
+
+async function unlockWithMk(mkKey, onStage = () => {}) {
+  authSession.mkKey = mkKey;
+  authSession.treeKey = mkKey;
+  await unlock('', onStage);
 }
 
 // Déchiffre les images (<img data-enc="…">) présentes dans un conteneur DOM
@@ -473,6 +563,7 @@ function renderLogin(errorMsg) {
 
 function logout() {
   sessionStorage.removeItem('gen_pass');
+  clearAuthSession();
   for (const url of imageCache.values()) URL.revokeObjectURL(url);
   imageCache.clear();
   state.key = null;
@@ -480,18 +571,38 @@ function logout() {
   state.families = null;
   state.container = null;
   location.hash = '';
-  renderLogin();
+  if (authMode) renderAuthGate(escapeHtml, afterAuthUnlock);
+  else renderLogin();
+}
+
+async function afterAuthUnlock(mkKey) {
+  try {
+    await unlockWithMk(mkKey);
+    showApp();
+  } catch (err) {
+    alert('Impossible de déverrouiller l\'arbre : ' + (err.message || err));
+    renderAuthGate(escapeHtml, afterAuthUnlock);
+  }
 }
 
 function switchTree() {
   logout();
   setCurrentTreeId('');
   state.treeId = null;
-  renderTreePicker();
+  if (authMode) renderAuthGate(escapeHtml, afterAuthUnlock);
+  else renderTreePicker();
 }
 
 // ------------------------------------------------------------------ shell app
 function showApp() {
+  if (needsPersonLink()) {
+    $('#login').hidden = true;
+    const app = $('#app');
+    app.hidden = false;
+    app.innerHTML = '<header class="topbar"><a href="#/" class="brand">🌳 Généalogie</a></header><main id="view"></main>';
+    renderPersonLink($('#view'), escapeHtml, state, persist);
+    return;
+  }
   $('#login').hidden = true;
   const app = $('#app');
   app.hidden = false;
@@ -503,18 +614,19 @@ function showApp() {
       </form>
       <span id="sync-status" class="sync-badge"></span>
       ${state.trees.length > 1 ? '<button id="switch-tree" class="link-btn" title="Changer d\'arbre">Arbres</button>' : ''}
-      <button id="publish" class="link-btn" title="Publier sur GitHub">Publier</button>
-      <button id="github-settings" class="link-btn" title="Configurer le dépôt et le token GitHub">⚙ GitHub</button>
-      <button id="export" class="link-btn" title="Télécharger tree.enc (secours)">⬇︎</button>
+      ${isAdmin() ? '<a href="#/admin" class="link-btn">Admin</a>' : ''}
+      ${canPublish() ? '<button id="publish" class="link-btn" title="Publier sur GitHub">Publier</button>' : ''}
+      ${canPublish() ? '<button id="github-settings" class="link-btn" title="Configurer GitHub">⚙ GitHub</button>' : ''}
+      ${canPublish() ? '<button id="export" class="link-btn" title="Télécharger secours">⬇︎</button>' : ''}
       <button id="logout" class="link-btn">Déconnexion</button>
     </header>
     <main id="view"></main>`;
   $('#logout').addEventListener('click', logout);
   const switchBtn = $('#switch-tree');
   if (switchBtn) switchBtn.addEventListener('click', switchTree);
-  $('#export').addEventListener('click', exportData);
-  $('#publish').addEventListener('click', publishData);
-  $('#github-settings').addEventListener('click', () => openGithubSettings());
+  if ($('#export')) $('#export').addEventListener('click', exportData);
+  if ($('#publish')) $('#publish').addEventListener('click', publishData);
+  if ($('#github-settings')) $('#github-settings').addEventListener('click', () => openGithubSettings());
   updateSyncStatus();
   $('#search-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -531,7 +643,9 @@ function route() {
   const [section, ...rest] = hash.split('/');
   const arg = rest.join('/');
 
-  if (section === 'person') renderPerson(view, decodeURIComponent(arg));
+  if (section === 'admin') renderAdminPanel(view, escapeHtml, state, persist);
+  else if (section === 'link-person') renderPersonLink(view, escapeHtml, state, persist);
+  else if (section === 'person') renderPerson(view, decodeURIComponent(arg));
   else if (section === 'tree') renderTreeView(view, decodeURIComponent(arg));
   else if (section === 'search') renderSearch(view, decodeURIComponent(arg || ''));
   else renderHome(view);
@@ -629,6 +743,9 @@ function renderPerson(view, id) {
          data-placeholder="portrait placeholder" data-icon="${icon}" alt="${escapeHtml(p.name)}" />`
     : `<div class="portrait placeholder">${icon}</div>`;
 
+  const canEdit = !authMode || canEditPerson(id);
+  const canEditFam = !authMode || canEditTree();
+
   view.innerHTML = `
     <section class="panel person">
       <div class="person-head">
@@ -638,21 +755,21 @@ function renderPerson(view, id) {
           ${eventLine('Naissance', p.birth)}
           ${eventLine('Décès', p.death)}
           <a class="btn" href="#/tree/${encodeURIComponent(id)}">Voir l'arbre</a>
-          <button class="btn btn-ghost" data-act="edit">Modifier</button>
-          <button class="btn btn-danger" data-act="delete">Supprimer</button>
+          ${canEdit ? '<button class="btn btn-ghost" data-act="edit">Modifier</button>' : ''}
+          ${canEditFam ? '<button class="btn btn-danger" data-act="delete">Supprimer</button>' : ''}
         </div>
       </div>
 
       <div class="rel-block">
-        <h4>Parents ${parents.length < 2 ? '<button class="add-btn" data-act="add-parent">+ ajouter</button>' : ''}</h4>
+        <h4>Parents ${canEditFam && parents.length < 2 ? '<button class="add-btn" data-act="add-parent">+ ajouter</button>' : ''}</h4>
         <div class="card-row">${parents.map(personCard).join('') || '<span class="muted">Aucun parent renseigné.</span>'}</div>
       </div>
       ${siblings.length ? `<div class="rel-block"><h4>Frères et sœurs</h4><div class="card-row">${siblings.map(personCard).join('')}</div></div>` : ''}
       ${unionsHtml}
-      <div class="rel-block actions-row">
+      ${canEditFam ? `<div class="rel-block actions-row">
         <button class="add-btn" data-act="add-spouse">+ Conjoint·e</button>
         <button class="add-btn" data-act="add-child">+ Enfant</button>
-      </div>
+      </div>` : ''}
       ${p.media.length > 1 ? `<div class="rel-block"><h4>Photos</h4><div class="gallery">${
         p.media.map((m) => `<img data-enc="${escapeHtml(mediaEncUrl(m.file))}" alt=""/>`).join('')
       }</div></div>` : ''}
@@ -811,10 +928,13 @@ async function boot() {
     return;
   }
 
+  authMode = await authModeAvailable();
+
   try {
     state.trees = await loadTreesIndex();
   } catch (err) {
-    renderLogin((err && err.message) || String(err));
+    if (authMode) renderAuthGate(escapeHtml, afterAuthUnlock);
+    else renderLogin((err && err.message) || String(err));
     return;
   }
 
@@ -823,13 +943,20 @@ async function boot() {
     if (state.trees.length === 1) {
       treeId = state.trees[0].id;
       setCurrentTreeId(treeId);
-    } else {
+    } else if (!authMode) {
       renderTreePicker();
       return;
     }
   }
-  state.treeId = treeId;
-  migrateLegacyStorage(state.treeId);
+  if (treeId) {
+    state.treeId = treeId;
+    migrateLegacyStorage(state.treeId);
+  }
+
+  if (authMode) {
+    renderAuthGate(escapeHtml, afterAuthUnlock);
+    return;
+  }
 
   const tokenMatch = /(?:^#|&)token=([^&]+)/.exec(location.hash);
   const stored = sessionStorage.getItem('gen_pass');
