@@ -69,6 +69,7 @@ function migrateLegacyStorage(treeId) {
 
 // --------------------------------------------------------------------- login
 async function loadContainer() {
+  if (!state.treeId) throw new Error('Aucun arbre sélectionné.');
   const key = storageKey(state.treeId);
   const fetchRemote = async () => {
     const res = await fetch(treeEncUrl(state.treeId), { cache: 'no-store' });
@@ -516,7 +517,7 @@ async function hydrateImages(root) {
   }
 }
 
-function renderTreePicker(errorMsg) {
+function renderTreePicker(errorMsg, onSelected) {
   $('#app').hidden = true;
   const login = $('#login');
   login.hidden = false;
@@ -539,7 +540,8 @@ function renderTreePicker(errorMsg) {
       state.treeId = btn.dataset.id;
       migrateLegacyStorage(state.treeId);
       state.container = null;
-      renderLogin();
+      if (onSelected) onSelected();
+      else renderLogin();
     });
   });
 }
@@ -629,7 +631,7 @@ function switchTree() {
   logout();
   setCurrentTreeId('');
   state.treeId = null;
-  if (authMode) renderAuthGate(escapeHtml, afterAuthUnlock);
+  if (authMode) renderTreePicker(null, () => renderAuthGate(escapeHtml, afterAuthUnlock));
   else renderTreePicker();
 }
 
@@ -964,6 +966,13 @@ function renderInsecureContextError() {
     </div>`;
 }
 
+function defaultAuthTreeId(trees) {
+  const principal = findTreeMeta(trees, 'principal');
+  if (principal) return principal.id;
+  const nonDemo = trees.find((t) => t.id !== 'exemple');
+  return (nonDemo || trees[0]).id;
+}
+
 async function boot() {
   if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
     renderInsecureContextError();
@@ -985,7 +994,10 @@ async function boot() {
     if (state.trees.length === 1) {
       treeId = state.trees[0].id;
       setCurrentTreeId(treeId);
-    } else if (!authMode) {
+    } else if (authMode) {
+      treeId = defaultAuthTreeId(state.trees);
+      setCurrentTreeId(treeId);
+    } else {
       renderTreePicker();
       return;
     }
