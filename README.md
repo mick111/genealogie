@@ -130,6 +130,9 @@ clé (jamais la clé en clair sur GitHub).
 # PIN admin 8 chiffres + mot de passe arbre (passwd / GEN_PASSWORD)
 node tools/migrate-auth.mjs --tree principal
 
+# Réinitialiser l'auth admin (registry + passkeys) sans toucher au GEDCOM source :
+ADMIN_PIN=12345678 node tools/migrate-auth.mjs --reset --tree principal --from-ged merged.ged
+
 # Tokens GitHub chiffrés (fichiers token_publish / token_register à la racine)
 ADMIN_PIN=12345678 node tools/encrypt-auth-tokens.mjs
 ```

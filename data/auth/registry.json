@@ -2,20 +2,18 @@
   "v": 1,
   "users": [
     {
-      "id": "admin-d6f110a7",
+      "id": "admin-9378f40a",
       "displayName": "Administrateur",
       "role": "admin",
       "status": "approved",
-      "needsPasskey": false,
+      "needsPasskey": true,
       "pinWrap": {
         "v": 1,
         "cipher": "AES-GCM",
-        "iv": "HWeNB0Rqjm2xbfw0",
-        "ct": "LuIJ7NsyiBsS7cXRSSGF/uRLCr01SvV223tyoEd2Tusel6RBDBES+6yemkUPFYMo"
+        "iv": "OmHJGC4OElCXe2/o",
+        "ct": "E7qTXYVWRKBTVs3zMWtNtZ3SBuXAlOJ6VnHx6lCNHK6tlN/cmsS5BeSD/gKlDNWr"
       },
-      "createdAt": "2026-07-18T21:48:26.676Z",
-      "credentialId": "JdOFkhUMNPSw5jgX9FbKfjqKiqSJe/+aV2U=",
-      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErHOxYqeSX7Dy03EYFXA9DlABn2VnGGp+LcCnsYzBHHyiOvfVy+h4AmjtRtyv9JK7AV2T9WYWSNRZ7RCHKS0NcQ=="
+      "createdAt": "2026-07-18T22:08:00.969Z"
     }
   ]
 }

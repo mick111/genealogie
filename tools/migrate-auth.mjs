@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 // Migration one-shot : mot de passe arbre → clé maître MK + auth passkey/PIN.
 //
-// Usage : node tools/migrate-auth.mjs --tree principal [--from-ged merged.ged]
-//   PIN admin 8 chiffres (secours) + mot de passe arbre via passwd / GEN_PASSWORD.
+// Usage :
+//   node tools/migrate-auth.mjs --tree principal [--from-ged merged.ged]
+//     Migration initiale (mot de passe arbre via passwd / GEN_PASSWORD).
+//   node tools/migrate-auth.mjs --reset --tree principal --from-ged merged.ged
+//     Réinitialise l'auth admin (nouveau PIN, nouvelle clé MK, registry vierge).
+//     ADMIN_PIN=12345678 recommandé en non-interactif.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { randomBytes, pbkdf2Sync, createCipheriv, createDecipheriv } from 'node:crypto';
@@ -49,14 +53,28 @@ function decryptLegacyGedcom(container, password) {
   return aesDecrypt(container, key).toString('utf8');
 }
 
+function readGedcomFromFlag() {
+  const fromGedIdx = process.argv.indexOf('--from-ged');
+  if (fromGedIdx < 0 || !process.argv[fromGedIdx + 1]) {
+    throw new Error('--from-ged <fichier.ged> requis.');
+  }
+  return readFileSync(process.argv[fromGedIdx + 1], 'utf8');
+}
+
 function readGedcomSource(treeId, encPath, password) {
+  if (process.argv.includes('--reset')) {
+    return readGedcomFromFlag();
+  }
   const fromGedIdx = process.argv.indexOf('--from-ged');
   if (fromGedIdx >= 0 && process.argv[fromGedIdx + 1]) {
     return readFileSync(process.argv[fromGedIdx + 1], 'utf8');
   }
   const container = JSON.parse(readFileSync(encPath, 'utf8'));
   if (container.v === 2 && container.type === 'tree') {
-    throw new Error('Arbre déjà migré (v2 MK). Utilisez encrypt-auth-tokens.mjs pour les tokens.');
+    throw new Error(
+      'Arbre déjà migré (v2 MK). Utilisez --reset --from-ged merged.ged pour réinitialiser l\'auth,\n' +
+      '  ou encrypt-auth-tokens.mjs pour rechiffrer les tokens seulement.',
+    );
   }
   if (container.v === 1 && container.type === 'tree' && !container.kdf) {
     throw new Error(
@@ -95,10 +113,19 @@ async function main() {
     adminPin = await ask('PIN admin secours (8 chiffres) : ');
   }
 
-  const password = loadPassword();
-  if (!password) {
-    console.error('Mot de passe arbre requis (passwd ou GEN_PASSWORD).');
+  const isReset = process.argv.includes('--reset');
+  if (isReset && !process.argv.includes('--from-ged')) {
+    console.error('Usage : node tools/migrate-auth.mjs --reset --tree principal --from-ged merged.ged');
     process.exit(1);
+  }
+
+  let password = '';
+  if (!isReset) {
+    password = loadPassword();
+    if (!password) {
+      console.error('Mot de passe arbre requis (passwd ou GEN_PASSWORD).');
+      process.exit(1);
+    }
   }
 
   const gedcom = readGedcomSource(treeId, encPath, password);
@@ -158,11 +185,15 @@ async function main() {
     console.log('⚠  token_publish absent : publication admin indisponible.');
   }
 
-  console.log('\n✓ Migration terminée.');
+  console.log(`\n✓ ${isReset ? 'Réinitialisation auth' : 'Migration'} terminée.`);
   console.log('  - Arbre v2 MK :', encPath);
   console.log('  - Auth : data/auth/');
   console.log('\nPIN admin (secours) :', adminPin);
   console.log('Dans le navigateur : connexion PIN → créer passkey admin → publier.\n');
+  if (isReset) {
+    console.log('Les anciennes passkeys et comptes famille ne fonctionnent plus.');
+    console.log('Publiez ce commit sur GitHub Pages, puis reconnectez-vous avec le PIN ci-dessus.\n');
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
