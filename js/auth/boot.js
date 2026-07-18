@@ -365,18 +365,62 @@ async function saveUserPasskey(user, mkRaw) {
   return freshRegistry;
 }
 
+function formatAccountPersonLink(user, state, escapeHtml) {
+  if (needsSetupFinalize(user)) {
+    return '<span class="muted">— (finalisation PIN en attente)</span>';
+  }
+  if (!user.pinWrap && user.needsPasskey) {
+    return '<span class="muted">— (passkey admin à créer)</span>';
+  }
+  if (!user.personId) {
+    return '<span class="muted">Non associé</span>';
+  }
+  const indi = state.individuals?.get(user.personId);
+  if (!indi) {
+    return `<span class="muted">Fiche introuvable</span> <code>${escapeHtml(user.personId)}</code>`;
+  }
+  const href = '#/person/' + encodeURIComponent(user.personId);
+  return `<a href="${href}">${escapeHtml(indi.name)}</a>`;
+}
+
 export async function renderAdminPanel(view, escapeHtml, state, persist) {
   if (!isAdmin()) {
     view.innerHTML = '<section class="panel"><p>Accès réservé à l\'administrateur.</p></section>';
     return;
   }
   const pending = (await loadPending()).pending;
+  const registry = await loadRegistry();
+  const accounts = registry.users
+    .filter((u) => u.status === 'approved')
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, 'fr'));
   view.innerHTML = `
     <section class="panel">
       <h2>Ma passkey</h2>
       <p class="muted">Recréez votre passkey après un changement d'appareil ou si l'ancienne a été supprimée des Réglages.</p>
       <button type="button" class="btn" id="recreate-passkey">Recréer ma passkey</button>
       <p id="passkey-status" class="muted" style="margin-top:.6rem"></p>
+    </section>
+    <section class="panel">
+      <h2>Comptes</h2>
+      <p class="muted">${accounts.length} compte(s) approuvé(s).</p>
+      ${accounts.length ? `
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Compte</th>
+              <th>Rôle</th>
+              <th>Personne dans l'arbre</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${accounts.map((u) => `
+              <tr>
+                <td><strong>${escapeHtml(u.displayName)}</strong></td>
+                <td>${escapeHtml(ROLE_LABELS[u.role] || u.role)}</td>
+                <td>${formatAccountPersonLink(u, state, escapeHtml)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>` : '<p class="muted">Aucun compte.</p>'}
     </section>
     <section class="panel">
       <h2>Validation des comptes</h2>

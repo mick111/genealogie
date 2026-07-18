@@ -265,6 +265,27 @@ main { max-width: 900px; margin: 0 auto; padding: 1rem; }
   border-radius: 10px; padding: .5rem .75rem; min-width: 140px;
 }
 .mini-card:hover { border-color: var(--accent); text-decoration: none; }
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: .8rem;
+  font-size: .92rem;
+}
+.admin-table th,
+.admin-table td {
+  text-align: left;
+  padding: .55rem .5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.admin-table th {
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.admin-table tbody tr:last-child td { border-bottom: none; }
 .mini-name { font-weight: 600; color: var(--ink); }
 .union { margin-top: 1rem; padding-top: .5rem; }
 
