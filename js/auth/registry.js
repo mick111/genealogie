@@ -5,6 +5,13 @@ import { loadGithubMeta, publishFile, fetchTextFile, loadBundledGithubConfig } f
 
 export const ROLES = ['viewer', 'self', 'editor', 'admin'];
 
+export const ROLE_LABELS = {
+  viewer: 'Lecture seule',
+  self: 'Sa fiche uniquement',
+  editor: 'Éditeur (arbre + publication)',
+  admin: 'Administrateur',
+};
+
 export async function loadRegistry() {
   const site = await loadSiteConfig();
   const { registry } = authPaths(site);

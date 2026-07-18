@@ -4,8 +4,8 @@ import { loadSiteConfig } from './site.js';
 import { registerPasskey, authenticatePasskey, wrapMkRawWithPrf, unwrapMkWithPrfRaw } from './webauthn.js';
 import { validatePin, wrapMkRawWithPin, unwrapMkWithPin } from './pin.js';
 import {
-  loadRegistry, saveRegistry, loadPending, appendPending,
-  findBootstrapAdmin, findUserByCredential, ROLES,
+  loadRegistry, saveRegistry, loadPending, savePending, appendPending,
+  findBootstrapAdmin, findUserByCredential, ROLES, ROLE_LABELS,
 } from './registry.js';
 import { authSession, setAuthSession, clearAuthSession, isAdmin } from './session.js';
 import { decryptTreeContainer, isMkTree } from './tree-lock.js';
@@ -263,6 +263,9 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
     </section>
     <section class="panel">
       <h2>Validation des comptes</h2>
+      <p class="muted">Rôles : <strong>Lecture seule</strong> — consulter l'arbre ;
+      <strong>Sa fiche uniquement</strong> — modifier sa propre personne (après lien dans l'arbre) ;
+      <strong>Éditeur</strong> — modifier tout l'arbre et publier sur GitHub.</p>
       <p class="muted">${pending.length} demande(s) en attente.</p>
       ${pending.length ? pending.map((p) => `
         <div class="mini-card" style="margin-bottom:.8rem;min-width:100%">
@@ -270,9 +273,10 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
           <span class="muted">${escapeHtml(p.createdAt)}</span>
           <div style="margin-top:.5rem">
             <select id="role-${escapeHtml(p.id)}">
-              ${ROLES.filter((r) => r !== 'admin').map((r) => `<option value="${r}">${r}</option>`).join('')}
+              ${ROLES.filter((r) => r !== 'admin').map((r) => `<option value="${r}">${escapeHtml(ROLE_LABELS[r] || r)}</option>`).join('')}
             </select>
             <button class="btn" data-approve="${escapeHtml(p.id)}" style="margin-left:.5rem">Approuver</button>
+            <button type="button" class="btn btn-danger" data-reject="${escapeHtml(p.id)}">Refuser</button>
           </div>
         </div>`).join('') : '<p class="muted">Aucune demande.</p>'}
     </section>`;
@@ -330,9 +334,29 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
       });
       doc.pending = doc.pending.filter((p) => p.id !== id);
       await saveRegistry(registry);
-      await import('./registry.js').then((m) => m.savePending(doc));
+      await savePending(doc);
       alert('Compte approuvé et publié.');
       renderAdminPanel(view, escapeHtml, state, persist);
+    });
+  });
+
+  view.querySelectorAll('[data-reject]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.reject;
+      const doc = await loadPending();
+      const req = doc.pending.find((p) => p.id === id);
+      if (!req) return;
+      if (!confirm(`Refuser la demande de ${req.displayName} ?`)) return;
+      btn.disabled = true;
+      try {
+        doc.pending = doc.pending.filter((p) => p.id !== id);
+        await savePending(doc);
+        alert('Demande refusée.');
+        renderAdminPanel(view, escapeHtml, state, persist);
+      } catch (err) {
+        alert(githubErrorMessage(err) || err.message || String(err));
+        btn.disabled = false;
+      }
     });
   });
 }
