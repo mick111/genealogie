@@ -603,6 +603,8 @@ function showApp() {
     renderPersonLink($('#view'), escapeHtml, state, persist);
     return;
   }
+  const allowPublish = !authMode || canPublish();
+  const allowExport = allowPublish || hasLocalEdits();
   $('#login').hidden = true;
   const app = $('#app');
   app.hidden = false;
@@ -615,9 +617,9 @@ function showApp() {
       <span id="sync-status" class="sync-badge"></span>
       ${state.trees.length > 1 ? '<button id="switch-tree" class="link-btn" title="Changer d\'arbre">Arbres</button>' : ''}
       ${isAdmin() ? '<a href="#/admin" class="link-btn">Admin</a>' : ''}
-      ${canPublish() ? '<button id="publish" class="link-btn" title="Publier sur GitHub">Publier</button>' : ''}
-      ${canPublish() ? '<button id="github-settings" class="link-btn" title="Configurer GitHub">⚙ GitHub</button>' : ''}
-      ${canPublish() ? '<button id="export" class="link-btn" title="Télécharger secours">⬇︎</button>' : ''}
+      ${allowPublish ? '<button id="publish" class="link-btn" title="Publier sur GitHub">Publier</button>' : ''}
+      ${allowPublish ? '<button id="github-settings" class="link-btn" title="Configurer GitHub">⚙ GitHub</button>' : ''}
+      ${allowExport ? '<button id="export" class="link-btn" title="Télécharger secours">⬇︎</button>' : ''}
       <button id="logout" class="link-btn">Déconnexion</button>
     </header>
     <main id="view"></main>`;
