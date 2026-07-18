@@ -6,14 +6,22 @@
       "displayName": "Administrateur",
       "role": "admin",
       "status": "approved",
-      "needsPasskey": true,
+      "needsPasskey": false,
       "pinWrap": {
         "v": 1,
         "cipher": "AES-GCM",
-        "iv": "OmHJGC4OElCXe2/o",
-        "ct": "E7qTXYVWRKBTVs3zMWtNtZ3SBuXAlOJ6VnHx6lCNHK6tlN/cmsS5BeSD/gKlDNWr"
+        "iv": "DDT5OvkD1tWQ+ggL",
+        "ct": "0m02gVS7ZGixJhgjoebJ2qHICy6UrPrqfbD6V81MD/WojTR55G55xp9ysK5Wx6Ct"
       },
-      "createdAt": "2026-07-18T22:08:00.969Z"
+      "createdAt": "2026-07-18T22:08:00.969Z",
+      "credentialId": "cZvetGPAQpLanHiLPTrDODVjHvyUxh+moYjnrjyn1HjZFLSLqw31EXFrXypSBjUE",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEDzLjlTTLYTWk+H3Q2zyjT9yAuRi0YtJGSyS4M3nwTpZaMmvqiygywOf+y7SmCHBXCbz1ZXhPTXBY98y4lviErQ==",
+      "prfWrap": {
+        "v": 1,
+        "cipher": "AES-GCM",
+        "iv": "DANxScAuCo3vSbyO",
+        "ct": "pDg1zOsgQSGULZYMlIbHWGcs0y1MhvZmE0j8MSmLM/mMWguXewBB12XVij60eiJV"
+      }
     }
   ]
 }
