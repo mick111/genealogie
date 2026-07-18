@@ -213,6 +213,9 @@ async function persist() {
     const { encryptTreeContainer } = await import('./auth/tree-lock.js');
     state.container = await encryptTreeContainer(state.key, text);
   } else {
+    if (!state.container?.kdf?.salt) {
+      throw new Error('Conteneur chiffré invalide (kdf manquant). Rechargez l’arbre depuis GitHub.');
+    }
     state.container = await encryptText(state.key, state.container.kdf, text);
   }
   localStorage.setItem(storageKey(state.treeId), JSON.stringify(state.container));

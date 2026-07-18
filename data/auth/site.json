@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "repoId": "genealogie",
+  "regSalt": "onRY5xE6FnCuNdt1uZzHaw==",
+  "pendingPath": "data/auth/pending.json",
+  "registryPath": "data/auth/registry.json"
+}

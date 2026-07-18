@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "users": [
+    {
+      "id": "admin-d6f110a7",
+      "displayName": "Administrateur",
+      "role": "admin",
+      "status": "approved",
+      "needsPasskey": true,
+      "pinWrap": {
+        "v": 1,
+        "cipher": "AES-GCM",
+        "iv": "ABqG763/MO0qgsxy",
+        "ct": "b1qznyiz+6/400TIuqaFpukjdIoTvizQ6PTDbooGgd4VFqa0EWrrtVijDD9MjziK"
+      },
+      "createdAt": "2026-07-18T21:48:26.676Z"
+    }
+  ]
+}

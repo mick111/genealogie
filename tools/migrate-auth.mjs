@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Migration one-shot : mot de passe arbre → clé maître MK + auth passkey/PIN.
 //
-// Usage : node tools/migrate-auth.mjs --tree principal
+// Usage : node tools/migrate-auth.mjs --tree principal [--from-ged merged.ged]
 //   PIN admin 8 chiffres (secours) + mot de passe arbre via passwd / GEN_PASSWORD.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { randomBytes, pbkdf2Sync, createCipheriv, createDecipheriv } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { loadPassword } from './passwd.mjs';
+import { loadPublishToken, loadRegisterToken } from './token-files.mjs';
 
 const ITER = 200000;
 
@@ -37,12 +38,38 @@ function aesDecrypt(container, key) {
 }
 
 function decryptLegacyGedcom(container, password) {
+  if (!container?.kdf?.salt) {
+    throw new Error(
+      'Conteneur invalide (kdf manquant). Le fichier a probablement été corrompu par une publication.\n' +
+      '  → git checkout HEAD -- trees/principal/tree.enc\n' +
+      '  → ou : node tools/migrate-auth.mjs --from-ged merged.ged',
+    );
+  }
   const key = pbkdf2Sync(password, Buffer.from(container.kdf.salt, 'base64'), container.kdf.iterations, 32, 'sha256');
   return aesDecrypt(container, key).toString('utf8');
 }
 
+function readGedcomSource(treeId, encPath, password) {
+  const fromGedIdx = process.argv.indexOf('--from-ged');
+  if (fromGedIdx >= 0 && process.argv[fromGedIdx + 1]) {
+    return readFileSync(process.argv[fromGedIdx + 1], 'utf8');
+  }
+  const container = JSON.parse(readFileSync(encPath, 'utf8'));
+  if (container.v === 2 && container.type === 'tree') {
+    throw new Error('Arbre déjà migré (v2 MK). Utilisez encrypt-auth-tokens.mjs pour les tokens.');
+  }
+  if (container.v === 1 && container.type === 'tree' && !container.kdf) {
+    throw new Error(
+      `Conteneur corrompu : ${encPath} (v1/tree sans kdf).\n` +
+      'Restaurez une sauvegarde : git checkout HEAD -- ' + encPath,
+    );
+  }
+  return decryptLegacyGedcom(container, password);
+}
+
 function encryptTree(mk, text) {
-  return { v: 2, type: 'tree', ...aesEncrypt(Buffer.from(text, 'utf8'), mk) };
+  const enc = aesEncrypt(Buffer.from(text, 'utf8'), mk);
+  return { v: 2, type: 'tree', cipher: enc.cipher, iv: enc.iv, ct: enc.ct };
 }
 
 function pinDerivedKey(userId, pin) {
@@ -74,8 +101,7 @@ async function main() {
     process.exit(1);
   }
 
-  const legacy = JSON.parse(readFileSync(encPath, 'utf8'));
-  const gedcom = decryptLegacyGedcom(legacy, password);
+  const gedcom = readGedcomSource(treeId, encPath, password);
   const mk = randomBytes(32);
   const adminId = 'admin-' + randomBytes(4).toString('hex');
 
@@ -111,13 +137,25 @@ async function main() {
 
   const regTokPath = 'data/github_reg_token.enc';
   const adminTokPath = 'data/github_token.enc';
-  if (existsSync('token')) {
-    const tok = readFileSync('token', 'utf8').trim().split(/\r?\n/)[0];
-    writeFileSync(regTokPath, JSON.stringify(aesEncrypt(Buffer.from(tok, 'utf8'), regPublishKey(site))));
-    writeFileSync(adminTokPath, JSON.stringify(aesEncrypt(Buffer.from(tok, 'utf8'), mk)));
-    console.log('✓ Tokens GitHub (inscription + admin) chiffrés.');
-  } else if (existsSync(adminTokPath)) {
-    console.log('⚠  Recréez data/github_reg_token.enc (fichier token à la racine).');
+  const publishTok = loadPublishToken();
+  const registerTok = loadRegisterToken();
+
+  if (publishTok) {
+    writeFileSync(adminTokPath, JSON.stringify(aesEncrypt(Buffer.from(publishTok, 'utf8'), mk)));
+    console.log('✓ token_publish → data/github_token.enc');
+  }
+  if (registerTok) {
+    writeFileSync(regTokPath, JSON.stringify(aesEncrypt(Buffer.from(registerTok, 'utf8'), regPublishKey(site))));
+    console.log('✓ token_register → data/github_reg_token.enc');
+  }
+  if (!publishTok && !registerTok) {
+    if (existsSync(adminTokPath)) {
+      console.log('⚠  Ajoutez token_publish et/ou token_register (ou token) à la racine.');
+    }
+  } else if (publishTok && !registerTok) {
+    console.log('⚠  token_register absent : inscriptions auto indisponibles.');
+  } else if (!publishTok && registerTok) {
+    console.log('⚠  token_publish absent : publication admin indisponible.');
   }
 
   console.log('\n✓ Migration terminée.');
