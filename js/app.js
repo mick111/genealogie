@@ -101,7 +101,7 @@ function renderLogin(errorMsg) {
       <input type="password" id="pw" placeholder="Mot de passe" autocomplete="current-password" autofocus />
       <button type="submit">Déverrouiller</button>
       <p id="login-status" class="muted"></p>
-      ${errorMsg ? `<p class="error">${errorMsg}</p>` : ''}
+      ${errorMsg ? `<pre class="error err-detail">${escapeHtml(errorMsg)}</pre>` : ''}
     </form>`;
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -116,9 +116,9 @@ function renderLogin(errorMsg) {
     } catch (err) {
       const msg = err.message === 'BAD_PASSWORD' ? 'Mot de passe incorrect.'
         : err.message === 'EMPTY' ? 'Aucun individu trouvé dans les données.'
-        : (err && err.message) || String(err);
+        : (err && (err.stack || err.message)) || String(err);
       console.error('[unlock] échec :', err);
-      renderLogin('Bloqué à : « ' + status.textContent + ' » → ' + msg);
+      renderLogin('Bloqué à : « ' + status.textContent + ' » →\n' + msg);
     }
   });
 }
