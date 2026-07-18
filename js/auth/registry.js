@@ -16,6 +16,18 @@ export async function loadRegistry() {
   }
 }
 
+function mergeRegistryUsers(remote, local) {
+  const localById = new Map(local.users.map((u) => [u.id, u]));
+  const users = remote.users.map((remoteUser) => {
+    const patch = localById.get(remoteUser.id);
+    return patch ? { ...remoteUser, ...patch } : remoteUser;
+  });
+  for (const u of local.users) {
+    if (!users.some((x) => x.id === u.id)) users.push(u);
+  }
+  return { ...remote, ...local, users };
+}
+
 export async function saveRegistry(registry) {
   const site = await loadSiteConfig();
   const { registry: path } = authPaths(site);
@@ -24,8 +36,14 @@ export async function saveRegistry(registry) {
   if (!meta?.owner) throw new Error('GITHUB_META');
   const { getGithubTokenFromMk } = await import('../github.js');
   const token = await getGithubTokenFromMk();
+  let toSave = registry;
+  try {
+    const remote = JSON.parse(await fetchTextFile(path));
+    toSave = mergeRegistryUsers(remote, registry);
+  } catch (_) { /* premier enregistrement */ }
   await publishFile(meta.owner, meta.repo, path, meta.branch || 'main', token,
-    JSON.stringify(registry, null, 2) + '\n', 'Mise à jour registry auth');
+    JSON.stringify(toSave, null, 2) + '\n', 'Mise à jour registry auth');
+  return toSave;
 }
 
 export async function loadPending() {

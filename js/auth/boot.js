@@ -133,10 +133,11 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
             break;
           } catch (_) { /* PIN incorrect pour cet utilisateur */ }
         }
-        if (!user) throw new Error('PIN inconnu.');
-        status.textContent = user.prfWrap ? 'Connecté.' : 'Activation passkey…';
-        user = await ensurePrfWrap(user, mkRaw, registry);
+        if (!user) throw new Error('PIN incorrect.');
         setAuthSession(user, mkKey, registry, mkRaw);
+        if (!user.prfWrap) status.textContent = 'Activation passkey…';
+        user = await ensurePrfWrap(user, mkRaw, registry);
+        authSession.user = user;
         status.textContent = 'Connecté.';
         await onUnlocked(mkKey);
       } catch (err) {
@@ -210,11 +211,20 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
         user.needsPasskey = false;
         user.pinWrap = await wrapMkRawWithPin(mkRaw, user.id, loginPin);
         if (reg.prfBytes) user.prfWrap = await wrapMkRawWithPrf(mkRaw, reg.prfBytes);
-        const idx = registry.users.findIndex((u) => u.id === user.id);
-        registry.users[idx] = user;
+        const freshRegistry = await loadRegistry();
+        const idx = freshRegistry.users.findIndex((u) => u.id === user.id);
+        if (idx < 0) throw new Error('Admin introuvable dans le registry.');
+        freshRegistry.users[idx] = {
+          ...freshRegistry.users[idx],
+          credentialId: user.credentialId,
+          publicKey: user.publicKey,
+          needsPasskey: false,
+          pinWrap: user.pinWrap,
+          ...(user.prfWrap ? { prfWrap: user.prfWrap } : {}),
+        };
         status.textContent = 'Publication registry…';
-        await saveRegistry(registry);
-        setAuthSession(user, mkKey, registry, mkRaw);
+        await saveRegistry(freshRegistry);
+        setAuthSession(freshRegistry.users[idx], mkKey, freshRegistry, mkRaw);
         await onUnlocked(mkKey);
       } catch (err) {
         status.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`;
