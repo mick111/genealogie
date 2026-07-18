@@ -9,7 +9,8 @@ fichier publié est illisible sans le mot de passe, même en regardant le code s
   choix du nombre de générations, fiches individuelles, recherche, photos.
 - **Édition** : ajouter parents / conjoint·e / enfants, modifier une fiche.
 - **Plusieurs arbres** : choix au démarrage (`trees/`), chacun avec son mot de passe.
-- Accès par **mot de passe** ou par **lien avec token**.
+- Accès par **mot de passe** ou par **lien avec token** ; option **comptes passkey**
+  pour la famille (voir §5).
 
 ---
 
@@ -73,12 +74,81 @@ Il faut un serveur HTTP (les modules ES ne se chargent pas via `file://`).
 
 ## 5. Accès : mot de passe & token
 
+Deux modes coexistent selon la configuration du dépôt :
+
+| Mode | Déclencheur | Connexion |
+|------|-------------|-----------|
+| **Classique** | pas de `data/auth/site.json` | Mot de passe arbre (+ lien `#token=…`) |
+| **Comptes passkey** | `data/auth/site.json` présent | Passkey (+ PIN secours 8 chiffres) |
+
+### Mode classique (mot de passe)
+
 - **Mot de passe** : saisi dans l'écran de connexion. Le déchiffrement se fait
   dans le navigateur ; le mot de passe ne quitte jamais l'appareil.
 - **Token (lien partageable)** : ajoute `#token=LEMOTDEPASSE` à l'URL, par ex.
   `https://<user>.github.io/<repo>/#token=famille2024`. Le fragment `#…` n'est
   jamais envoyé au serveur ni journalisé. Le lien déverrouille automatiquement,
   puis le token est retiré de la barre d'adresse.
+
+### Mode comptes passkey (famille)
+
+Quand `data/auth/site.json` est publié, le site bascule en **authentification
+par comptes** : chaque membre de la famille a sa passkey (Touch ID, Face ID,
+Windows Hello, clé de sécurité…). L'arbre reste chiffré avec une **clé maître
+(MK)** unique ; chaque compte ne reçoit qu'une **enveloppe** chiffrée de cette
+clé (jamais la clé en clair sur GitHub).
+
+**Connexion :**
+
+1. **Passkey** (recommandé) — après une première activation via PIN (voir ci-dessous).
+2. **PIN secours** (8 chiffres) — toujours disponible si la passkey est perdue.
+
+> La première connexion (ou après réinstallation du navigateur) se fait avec le
+> **PIN secours** : le site active alors la connexion passkey pour les fois
+> suivantes (extension WebAuthn PRF, si le navigateur la supporte).
+
+**Inscription d'un membre :**
+
+1. La personne clique **Créer un compte**, choisit un nom et un PIN secours, crée sa passkey.
+2. La demande part **automatiquement** sur GitHub (`data/auth/pending.json`).
+3. L'administrateur ouvre `#/admin`, saisit le **PIN choisi par la personne**
+   (communiqué de vive voix ou par un canal sûr), choisit un **rôle** et approuve.
+4. Le compte apparaît dans `data/auth/registry.json` ; la personne peut se connecter.
+
+**Rôles :**
+
+| Rôle | Droits |
+|------|--------|
+| `viewer` | Lecture seule |
+| `self` | Lecture + modification de **sa** fiche (après lien `#/link`) |
+| `editor` | Édition large + publication |
+| `admin` | Tout + validation des inscriptions |
+
+**Migration depuis le mot de passe unique** (one-shot, en local) :
+
+```bash
+# PIN admin 8 chiffres + mot de passe arbre (passwd / GEN_PASSWORD)
+node tools/migrate-auth.mjs --tree principal
+
+# Tokens GitHub chiffrés (fichiers token_publish / token_register à la racine)
+ADMIN_PIN=12345678 node tools/encrypt-auth-tokens.mjs
+```
+
+Puis dans le navigateur : connexion **PIN admin** → création **passkey admin** →
+utilisation normale. Les tokens GitHub (`data/github_token.enc` pour publier
+l'arbre, `data/github_reg_token.enc` pour les inscriptions auto) sont alors
+chiffrés avec la clé maître, plus avec le mot de passe arbre.
+
+**Fichiers auth publiés :**
+
+```text
+data/auth/site.json       configuration (sel, chemins)
+data/auth/registry.json   comptes approuvés + enveloppes MK
+data/auth/pending.json    demandes d'inscription en attente
+```
+
+Les tokens GitHub bruts (`token`, `token_publish`, `token_register`) restent
+**hors dépôt** (`.gitignore`).
 
 ---
 
@@ -131,9 +201,13 @@ déchiffre à la volée et les affiche sur les fiches.
 
 - La protection est **réelle** pour tout le contenu (noms, dates, lieux, liens
   **et photos**) : chiffré AES-256-GCM, clé dérivée par PBKDF2 (200 000 itérations).
-- La solidité dépend **entièrement de ton mot de passe** : choisis-en un long.
-- C'est du statique : pas de gestion de comptes, pas de révocation individuelle.
-  Changer le mot de passe = re-chiffrer et republier.
+- En mode **mot de passe**, la solidité dépend **entièrement du mot de passe** :
+  choisis-en un long.
+- En mode **passkey**, la clé maître est répartie via enveloppes par utilisateur
+  (PRF passkey + PIN secours). Révoquer quelqu'un = retirer son entrée du
+  `registry.json` et republier (sans rechiffrer tout l'arbre).
+- C'est du statique : pas de serveur d'auth. Les métadonnées comptes (`registry.json`)
+  sont publics dans le dépôt, mais illisibles sans passkey ou PIN de la personne.
 - Le site est en `noindex` pour éviter le référencement par les moteurs.
 
 ## Structure
@@ -145,14 +219,19 @@ js/crypto.js         déchiffrement WebCrypto
 js/gedcom.js         parseur GEDCOM
 js/tree.js           arbre ascendant SVG
 js/app.js            application (login, routing, fiches, recherche)
+js/auth/             authentification passkey + PIN (si site.json)
 js/trees.js           catalogue et chemins multi-arbres
 js/github.js         publication GitHub (token chiffré)
-data/github_token.enc  token GitHub chiffré (publié)
+data/github_token.enc  token GitHub admin chiffré (publié)
+data/github_reg_token.enc  token inscriptions auto chiffré (publié)
 data/github_meta.json  config dépôt GitHub
+data/auth/           registry + pending (mode passkey)
 trees/index.json       catalogue des arbres
 trees/<id>/tree.enc    GEDCOM chiffré (généré, publié)
 trees/<id>/media/*.enc photos chiffrées (générées, publiées)
 tools/build.mjs      chiffre le .ged + les photos  ->  trees/<id>/
+tools/migrate-auth.mjs  migration mot de passe → clé maître + auth
+tools/encrypt-auth-tokens.mjs  chiffre token_publish / token_register
 tools/verify.mjs     test local déchiffrement + parsing
 sample/famille.ged   exemple factice (mot de passe : famille2024)
 ```

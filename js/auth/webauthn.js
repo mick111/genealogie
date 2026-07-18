@@ -27,8 +27,8 @@ function b64ToBuf(b64s) {
   return out;
 }
 
-function prfSalt(userId) {
-  return new TextEncoder().encode('prf|genealogie|' + userId);
+function prfSalt() {
+  return new TextEncoder().encode('prf|genealogie|v1');
 }
 
 export function credentialIdB64(credential) {
@@ -44,31 +44,50 @@ export async function registerPasskey(displayName, userId = uid()) {
     challenge: crypto.getRandomValues(new Uint8Array(32)),
     pubKeyCredParams: [{ alg: -7, type: 'public-key' }, { alg: -257, type: 'public-key' }],
     authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
-    extensions: { prf: { eval: { first: prfSalt(userId) } } },
+    extensions: { prf: { eval: { first: prfSalt() } } },
   };
   const cred = /** @type {PublicKeyCredential} */ (await navigator.credentials.create({ publicKey: opts }));
   const ext = cred.getClientExtensionResults?.();
+  const prfOut = ext?.prf?.results?.first;
   return {
     userId,
     displayName,
     credentialId: credentialIdB64(cred),
     publicKey: cred.response.getPublicKey ? b64(cred.response.getPublicKey()) : null,
-    prfEnabled: !!(ext?.prf?.enabled && ext?.prf?.results?.first),
+    prfEnabled: !!(ext?.prf?.enabled && prfOut),
+    prfBytes: prfOut ? new Uint8Array(prfOut) : null,
   };
 }
 
-export async function authenticatePasskey(credentialIdB64str) {
+export async function authenticatePasskey(credentialIdB64str = null) {
+  if (!window.PublicKeyCredential) throw new Error('WEBAUTHN_UNAVAILABLE');
   const opts = {
     challenge: crypto.getRandomValues(new Uint8Array(32)),
     rpId: getRpId(),
-    allowCredentials: [{ type: 'public-key', id: b64ToBuf(credentialIdB64str) }],
     userVerification: 'preferred',
-    extensions: { prf: { eval: { first: prfSalt(sessionStorage.getItem('gen_auth_uid') || '') } } },
+    extensions: { prf: { eval: { first: prfSalt() } } },
   };
+  if (credentialIdB64str) {
+    opts.allowCredentials = [{ type: 'public-key', id: b64ToBuf(credentialIdB64str) }];
+  }
   const cred = /** @type {PublicKeyCredential} */ (await navigator.credentials.get({ publicKey: opts }));
   const ext = cred.getClientExtensionResults?.();
   const prfOut = ext?.prf?.results?.first;
-  return { ok: true, prfKey: prfOut ? importRawAesKey(new Uint8Array(prfOut)) : null };
+  return {
+    credentialId: credentialIdB64(cred),
+    prfKey: prfOut ? await importRawAesKey(new Uint8Array(prfOut)) : null,
+    prfBytes: prfOut ? new Uint8Array(prfOut) : null,
+  };
+}
+
+export async function wrapMkRawWithPrf(mkRaw, prfBytes) {
+  const prfKey = await importRawAesKey(new Uint8Array(prfBytes));
+  return encryptBytesWithKey(prfKey, mkRaw);
+}
+
+export async function unwrapMkWithPrfRaw(prfWrap, prfKey) {
+  const mkRaw = await decryptBytesWithContainer(prfKey, prfWrap);
+  return { mkKey: await importRawAesKey(mkRaw), mkRaw };
 }
 
 export async function wrapMkWithPrf(mkKey, userId, prfBytes) {

@@ -1,11 +1,11 @@
 // Écran d'authentification passkey + inscription auto (option B).
 
 import { loadSiteConfig } from './site.js';
-import { registerPasskey, credentialIdB64 } from './webauthn.js';
+import { registerPasskey, authenticatePasskey, wrapMkRawWithPrf, unwrapMkWithPrfRaw } from './webauthn.js';
 import { validatePin, wrapMkRawWithPin, unwrapMkWithPin } from './pin.js';
 import {
   loadRegistry, saveRegistry, loadPending, appendPending,
-  findBootstrapAdmin, ROLES,
+  findBootstrapAdmin, findUserByCredential, ROLES,
 } from './registry.js';
 import { authSession, setAuthSession, clearAuthSession, isAdmin } from './session.js';
 import { decryptTreeContainer, isMkTree } from './tree-lock.js';
@@ -25,6 +25,33 @@ export async function authModeAvailable() {
 async function unwrapUserMk(user, pin) {
   if (!user.pinWrap) throw new Error('NO_PIN_WRAP');
   return unwrapMkWithPin(user.pinWrap, user.id, pin);
+}
+
+async function ensurePrfWrap(user, mkRaw, registry) {
+  if (user.prfWrap || !user.credentialId) return user;
+  try {
+    const auth = await authenticatePasskey(user.credentialId);
+    if (!auth.prfBytes) return user;
+    user.prfWrap = await wrapMkRawWithPrf(mkRaw, auth.prfBytes);
+    const idx = registry.users.findIndex((u) => u.id === user.id);
+    if (idx >= 0) registry.users[idx] = user;
+    await saveRegistry(registry);
+  } catch (_) { /* PRF optionnel — PIN secours reste disponible */ }
+  return user;
+}
+
+async function loginWithPasskey(registry, statusEl, escapeHtml, onUnlocked) {
+  const auth = await authenticatePasskey();
+  const user = findUserByCredential(registry, auth.credentialId);
+  if (!user) throw new Error('Compte non reconnu.');
+  if (!user.prfWrap) {
+    throw new Error('Utilisez votre PIN secours une fois pour activer la connexion passkey.');
+  }
+  if (!auth.prfKey) throw new Error('Passkey sans PRF — utilisez le PIN secours.');
+  const { mkKey, mkRaw } = await unwrapMkWithPrfRaw(user.prfWrap, auth.prfKey);
+  setAuthSession(user, mkKey, registry, mkRaw);
+  if (statusEl) statusEl.textContent = 'Connecté.';
+  await onUnlocked(mkKey);
 }
 
 export async function unlockMkForUser(user, pin) {
@@ -56,15 +83,34 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
     const registry = await loadRegistry();
     const bootstrap = findBootstrapAdmin(registry);
     show(`
-      <form id="auth-form" class="login-card">
+      <div class="login-card">
         <h1>Connexion</h1>
-        ${bootstrap ? '<p class="muted">Première connexion admin : utilisez votre PIN secours (8 chiffres), puis créez votre passkey.</p>' : ''}
-        <label>PIN secours (8 chiffres)<input name="pin" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="off" required></label>
-        <button type="submit" class="btn" style="width:100%;margin-top:.8rem">Continuer</button>
+        ${bootstrap
+          ? '<p class="muted">Première connexion admin : utilisez votre PIN secours (8 chiffres), puis créez votre passkey.</p>'
+          : `<button type="button" class="btn" id="btn-passkey" style="width:100%">Se connecter avec passkey</button>
+             <p class="muted" style="text-align:center;margin:.8rem 0">ou PIN secours</p>`}
+        <form id="auth-form">
+          <label>PIN secours (8 chiffres)<input name="pin" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="off" required></label>
+          <button type="submit" class="btn" style="width:100%;margin-top:.8rem">${bootstrap ? 'Continuer' : 'Connexion PIN'}</button>
+        </form>
         <button type="button" class="link-btn" id="back" style="margin-top:.6rem">← Retour</button>
         <p id="auth-status" class="muted"></p>
-      </form>`);
+      </div>`);
     $('#back').addEventListener('click', screenHome);
+    const passkeyBtn = $('#btn-passkey');
+    if (passkeyBtn) {
+      passkeyBtn.addEventListener('click', async () => {
+        const status = $('#auth-status');
+        passkeyBtn.disabled = true;
+        status.textContent = 'Passkey…';
+        try {
+          await loginWithPasskey(registry, status, escapeHtml, onUnlocked);
+        } catch (err) {
+          status.innerHTML = `<span class="error">${escapeHtml(err.message || String(err))}</span>`;
+          passkeyBtn.disabled = false;
+        }
+      });
+    }
     $('#auth-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const pin = new FormData(e.target).get('pin');
@@ -76,7 +122,6 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
           screenAdminPasskeySetup(bootstrap, mkKey, mkRaw, pin, registry, onUnlocked);
           return;
         }
-        // Connexion : PIN + credential connu (simplifié v1 — passkey PRF phase 2)
         const users = registry.users.filter((u) => u.status === 'approved' && u.pinWrap);
         let user = null;
         let mkKey = null;
@@ -89,6 +134,8 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
           } catch (_) { /* PIN incorrect pour cet utilisateur */ }
         }
         if (!user) throw new Error('PIN inconnu.');
+        status.textContent = user.prfWrap ? 'Connecté.' : 'Activation passkey…';
+        user = await ensurePrfWrap(user, mkRaw, registry);
         setAuthSession(user, mkKey, registry, mkRaw);
         status.textContent = 'Connecté.';
         await onUnlocked(mkKey);
@@ -162,6 +209,7 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
         user.publicKey = reg.publicKey;
         user.needsPasskey = false;
         user.pinWrap = await wrapMkRawWithPin(mkRaw, user.id, loginPin);
+        if (reg.prfBytes) user.prfWrap = await wrapMkRawWithPrf(mkRaw, reg.prfBytes);
         const idx = registry.users.findIndex((u) => u.id === user.id);
         registry.users[idx] = user;
         status.textContent = 'Publication registry…';
