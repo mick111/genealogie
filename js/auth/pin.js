@@ -19,16 +19,21 @@ async function pinWrapKey(userId, pin) {
   return deriveKey(pin, saltB64('pin|' + userId), 150000, 'SHA-256');
 }
 
-export async function wrapMkWithPin(mkKey, userId, pin) {
+export async function wrapMkRawWithPin(mkRaw, userId, pin) {
   if (!validatePin(pin)) throw new Error('PIN_INVALID');
   const pinKey = await pinWrapKey(userId, pin.trim());
+  return encryptBytesWithKey(pinKey, mkRaw);
+}
+
+export async function wrapMkWithPin(mkKey, userId, pin) {
   const raw = await exportRawAesKey(mkKey);
-  return encryptBytesWithKey(pinKey, raw);
+  return wrapMkRawWithPin(raw, userId, pin);
 }
 
 export async function unwrapMkWithPin(pinWrap, userId, pin) {
   if (!validatePin(pin)) throw new Error('PIN_INVALID');
   const pinKey = await pinWrapKey(userId, pin.trim());
-  const raw = await decryptBytesWithContainer(pinKey, pinWrap);
-  return importRawAesKey(raw);
+  const mkRaw = await decryptBytesWithContainer(pinKey, pinWrap);
+  const mkKey = await importRawAesKey(mkRaw);
+  return { mkKey, mkRaw };
 }

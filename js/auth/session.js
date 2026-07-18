@@ -3,6 +3,7 @@
 export const authSession = {
   user: null,       // entrée registry
   mkKey: null,      // CryptoKey clé maître
+  mkRaw: null,      // octets MK (session — pour ré-enveloppe PIN sans exportKey)
   treeKey: null,    // alias = mkKey pour tree.enc
   registry: null,
 };
@@ -10,15 +11,17 @@ export const authSession = {
 export function clearAuthSession() {
   authSession.user = null;
   authSession.mkKey = null;
+  authSession.mkRaw = null;
   authSession.treeKey = null;
   authSession.registry = null;
   sessionStorage.removeItem('gen_auth_uid');
   sessionStorage.removeItem('gen_auth_cred');
 }
 
-export function setAuthSession(user, mkKey, registry) {
+export function setAuthSession(user, mkKey, registry, mkRaw = null) {
   authSession.user = user;
   authSession.mkKey = mkKey;
+  authSession.mkRaw = mkRaw;
   authSession.treeKey = mkKey;
   authSession.registry = registry;
   sessionStorage.setItem('gen_auth_uid', user.id);

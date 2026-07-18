@@ -2,7 +2,7 @@
 
 import { loadSiteConfig } from './site.js';
 import { registerPasskey, credentialIdB64 } from './webauthn.js';
-import { validatePin, wrapMkWithPin, unwrapMkWithPin } from './pin.js';
+import { validatePin, wrapMkRawWithPin, unwrapMkWithPin } from './pin.js';
 import {
   loadRegistry, saveRegistry, loadPending, appendPending,
   findBootstrapAdmin, ROLES,
@@ -28,7 +28,8 @@ async function unwrapUserMk(user, pin) {
 }
 
 export async function unlockMkForUser(user, pin) {
-  return unwrapUserMk(user, pin);
+  const { mkKey } = await unwrapUserMk(user, pin);
+  return mkKey;
 }
 
 export function renderAuthGate(escapeHtml, onUnlocked) {
@@ -70,26 +71,27 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
       const status = $('#auth-status');
       try {
         if (bootstrap) {
-          const mk = await unwrapUserMk(bootstrap, pin);
-          setAuthSession(bootstrap, mk, registry);
-          screenAdminPasskeySetup(bootstrap, mk, registry, onUnlocked);
+          const { mkKey, mkRaw } = await unwrapUserMk(bootstrap, pin);
+          setAuthSession(bootstrap, mkKey, registry, mkRaw);
+          screenAdminPasskeySetup(bootstrap, mkKey, mkRaw, pin, registry, onUnlocked);
           return;
         }
         // Connexion : PIN + credential connu (simplifié v1 — passkey PRF phase 2)
         const users = registry.users.filter((u) => u.status === 'approved' && u.pinWrap);
         let user = null;
-        let mk = null;
+        let mkKey = null;
+        let mkRaw = null;
         for (const u of users) {
           try {
-            mk = await unwrapUserMk(u, pin);
+            ({ mkKey, mkRaw } = await unwrapUserMk(u, pin));
             user = u;
             break;
           } catch (_) { /* PIN incorrect pour cet utilisateur */ }
         }
         if (!user) throw new Error('PIN inconnu.');
-        setAuthSession(user, mk, registry);
+        setAuthSession(user, mkKey, registry, mkRaw);
         status.textContent = 'Connecté.';
-        await onUnlocked(mk);
+        await onUnlocked(mkKey);
       } catch (err) {
         status.innerHTML = `<span class="error">${escapeHtml(err.message || String(err))}</span>`;
       }
@@ -144,7 +146,7 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
     });
   };
 
-  const screenAdminPasskeySetup = async (user, mk, registry, onUnlocked) => {
+  const screenAdminPasskeySetup = async (user, mkKey, mkRaw, loginPin, registry, onUnlocked) => {
     show(`
       <div class="login-card">
         <h1>Passkey administrateur</h1>
@@ -159,13 +161,13 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
         user.credentialId = reg.credentialId;
         user.publicKey = reg.publicKey;
         user.needsPasskey = false;
-        user.pinWrap = await wrapMkWithPin(mk, user.id, prompt('Confirmez PIN secours (8 chiffres) :') || '');
+        user.pinWrap = await wrapMkRawWithPin(mkRaw, user.id, loginPin);
         const idx = registry.users.findIndex((u) => u.id === user.id);
         registry.users[idx] = user;
         status.textContent = 'Publication registry…';
         await saveRegistry(registry);
-        setAuthSession(user, mk, registry);
-        await onUnlocked(mk);
+        setAuthSession(user, mkKey, registry, mkRaw);
+        await onUnlocked(mkKey);
       } catch (err) {
         status.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`;
       }
@@ -208,7 +210,8 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
       const pin = window.prompt(`PIN secours (8 chiffres) choisi par ${req.displayName} lors de l'inscription :`);
       if (!pin || !validatePin(pin)) { alert('PIN invalide (8 chiffres).'); return; }
       const registry = await loadRegistry();
-      const pinWrap = await wrapMkWithPin(authSession.mkKey, req.id, pin);
+      if (!authSession.mkRaw) { alert('Session expirée — reconnectez-vous.'); return; }
+      const pinWrap = await wrapMkRawWithPin(authSession.mkRaw, req.id, pin);
       registry.users.push({
         id: req.id,
         displayName: req.displayName,
