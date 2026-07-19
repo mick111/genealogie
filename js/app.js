@@ -524,7 +524,9 @@ function renderTreePicker(errorMsg, onSelected) {
   login.innerHTML = `
     <div class="login-card tree-picker">
       <h1>🌳 Choisir un arbre</h1>
-      <p class="muted">Chaque arbre a son propre mot de passe.</p>
+      <p class="muted">${authMode
+        ? 'Choisissez l\'arbre à consulter (même compte, même session).'
+        : 'Chaque arbre a son propre mot de passe.'}</p>
       <div class="tree-list">
         ${state.trees.map((t) => `
           <button type="button" class="tree-choice" data-id="${escapeHtml(t.id)}">
@@ -628,6 +630,28 @@ async function afterAuthUnlock(mkKey) {
 }
 
 function switchTree() {
+  if (authMode && authSession.mkKey) {
+    for (const url of imageCache.values()) URL.revokeObjectURL(url);
+    imageCache.clear();
+    state.key = null;
+    state.individuals = null;
+    state.families = null;
+    state.container = null;
+    setCurrentTreeId('');
+    state.treeId = null;
+    $('#app').hidden = true;
+    location.hash = '';
+    renderTreePicker(null, async () => {
+      try {
+        await unlockWithMk(authSession.mkKey);
+        showApp();
+      } catch (err) {
+        alert('Impossible de déverrouiller l\'arbre : ' + (err.message || err));
+        renderAuthGate(escapeHtml, afterAuthUnlock);
+      }
+    });
+    return;
+  }
   logout();
   setCurrentTreeId('');
   state.treeId = null;

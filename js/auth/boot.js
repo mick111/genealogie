@@ -32,7 +32,7 @@ async function unwrapUserMk(user, pin) {
   return unwrapMkWithPin(user.pinWrap, user.id, pin);
 }
 
-async function ensurePrfWrap(user, mkRaw, registry) {
+async function ensurePrfWrap(user, mkRaw, registry, saveOpts) {
   if (user.prfWrap || !user.credentialId) return user;
   try {
     const auth = await authenticatePasskey(user.credentialId);
@@ -40,7 +40,7 @@ async function ensurePrfWrap(user, mkRaw, registry) {
     user.prfWrap = await wrapMkRawWithPrf(mkRaw, auth.prfBytes);
     const idx = registry.users.findIndex((u) => u.id === user.id);
     if (idx >= 0) registry.users[idx] = user;
-    await saveRegistry(registry);
+    await saveRegistry(registry, saveOpts);
   } catch (_) { /* PRF optionnel — PIN secours reste disponible */ }
   return user;
 }
@@ -80,9 +80,10 @@ async function finalizeUserAccount(user, pin, registry, onUnlocked, statusEl) {
   if (statusEl) statusEl.textContent = 'Déverrouillage…';
   const mkRaw = await unwrapMkFromSetup(user.setupWrap, setupPk);
   const mkKey = await importRawAesKey(mkRaw);
+  setAuthSession(user, mkKey, registry, mkRaw);
   user.pinWrap = await wrapMkRawWithPin(mkRaw, user.id, pin);
   if (statusEl) statusEl.textContent = 'Activation passkey…';
-  user = await ensurePrfWrap(user, mkRaw, registry);
+  user = await ensurePrfWrap(user, mkRaw, registry, { registrationToken: true });
   const idx = registry.users.findIndex((u) => u.id === user.id);
   if (idx < 0) throw new Error('Utilisateur introuvable.');
   registry.users[idx] = {
@@ -93,7 +94,7 @@ async function finalizeUserAccount(user, pin, registry, onUnlocked, statusEl) {
   };
   delete registry.users[idx].setupWrap;
   if (statusEl) statusEl.textContent = 'Publication…';
-  await saveRegistry(registry);
+  await saveRegistry(registry, { registrationToken: true });
   clearSetupPrivateKey(user.id);
   setAuthSession(registry.users[idx], mkKey, registry, mkRaw);
   if (statusEl) statusEl.textContent = 'Compte activé.';

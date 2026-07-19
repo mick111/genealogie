@@ -35,14 +35,15 @@ function mergeRegistryUsers(remote, local) {
   return { ...remote, ...local, users };
 }
 
-export async function saveRegistry(registry) {
+export async function saveRegistry(registry, opts = {}) {
   const site = await loadSiteConfig();
   const { registry: path } = authPaths(site);
   await loadBundledGithubConfig();
   const meta = loadGithubMeta();
   if (!meta?.owner) throw new Error('GITHUB_META');
-  const { getGithubTokenFromMk } = await import('../github.js');
-  const token = await getGithubTokenFromMk();
+  const token = opts.registrationToken
+    ? await getRegistrationPublishToken()
+    : await (await import('../github.js')).getGithubTokenFromMk();
   let toSave = registry;
   try {
     const remote = JSON.parse(await fetchTextFile(path));
