@@ -18,6 +18,23 @@ import { githubErrorMessage } from '../github.js';
 
 const $ = (sel) => document.querySelector(sel);
 
+function normalizeSearch(s) {
+  return (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function filterPeopleForLink(people, query, limit = 40) {
+  const q = normalizeSearch(query.trim());
+  if (!q) return [];
+  return people.filter((p) =>
+    normalizeSearch(p.name).includes(q)
+    || normalizeSearch(p.surname).includes(q)
+    || normalizeSearch(p.marriedSurname).includes(q),
+  ).slice(0, limit);
+}
+
 export async function authModeAvailable() {
   try {
     await loadSiteConfig();
@@ -567,25 +584,53 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
 export function renderPersonLink(view, escapeHtml, state, persist) {
   const u = authSession.user;
   const people = [...state.individuals.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+
+  const pickPerson = async (personId) => {
+    u.personId = personId;
+    const registry = await loadRegistry();
+    const idx = registry.users.findIndex((x) => x.id === u.id);
+    if (idx >= 0) registry.users[idx].personId = u.personId;
+    await saveRegistry(registry);
+    authSession.user.personId = u.personId;
+    location.hash = '#/person/' + encodeURIComponent(u.personId);
+  };
+
+  const renderResults = (query) => {
+    const results = filterPeopleForLink(people, query);
+    const hint = view.querySelector('#person-link-hint');
+    const list = view.querySelector('#person-link-results');
+    if (!hint || !list) return;
+    const trimmed = query.trim();
+    if (!trimmed) {
+      hint.textContent = 'Tapez un nom ou un prénom pour trouver votre fiche.';
+      list.innerHTML = '';
+      return;
+    }
+    hint.textContent = results.length
+      ? `${results.length} résultat(s) pour « ${trimmed} » — cliquez sur votre nom.`
+      : `Aucun résultat pour « ${trimmed} ».`;
+    list.innerHTML = results.map((p) =>
+      `<li><button type="button" class="link-btn person-pick" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button></li>`,
+    ).join('');
+    list.querySelectorAll('.person-pick').forEach((btn) => {
+      btn.addEventListener('click', () => pickPerson(btn.dataset.id));
+    });
+  };
+
   view.innerHTML = `
     <section class="panel">
       <h2>Qui êtes-vous dans l'arbre ?</h2>
-      <p class="muted">Choisissez votre fiche. Vous pourrez modifier vos informations si l'admin vous a accordé ce droit.</p>
-      <ul class="person-list">
-        ${people.map((p) => `<li><button type="button" class="link-btn person-pick" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button></li>`).join('')}
-      </ul>
+      <p class="muted">Recherchez votre fiche pour vous y associer. Vous pourrez modifier vos informations si l'admin vous a accordé ce droit.</p>
+      <form id="person-link-form" class="person-link-search">
+        <input type="search" id="person-link-q" placeholder="Rechercher un nom…" autocomplete="off" autofocus />
+      </form>
+      <p id="person-link-hint" class="muted">Tapez un nom ou un prénom pour trouver votre fiche.</p>
+      <ul id="person-link-results" class="person-list"></ul>
     </section>`;
-  view.querySelectorAll('.person-pick').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      u.personId = btn.dataset.id;
-      const registry = await loadRegistry();
-      const idx = registry.users.findIndex((x) => x.id === u.id);
-      if (idx >= 0) registry.users[idx].personId = u.personId;
-      await saveRegistry(registry);
-      authSession.user.personId = u.personId;
-      location.hash = '#/person/' + encodeURIComponent(u.personId);
-    });
-  });
+
+  const input = view.querySelector('#person-link-q');
+  view.querySelector('#person-link-form').addEventListener('submit', (e) => e.preventDefault());
+  input.addEventListener('input', () => renderResults(input.value));
 }
 
 export { clearAuthSession } from './session.js';

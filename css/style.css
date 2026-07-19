@@ -208,6 +208,17 @@ main { max-width: 900px; margin: 0 auto; padding: 1rem; }
 .person-list li { break-inside: avoid; margin: .15rem 0; }
 @media (max-width: 560px) { .person-list { columns: 1; } }
 
+.person-link-search { margin: 1rem 0 .6rem; }
+.person-link-search input {
+  width: 100%;
+  padding: .65rem .85rem;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 1rem;
+}
+
 /* ---------- fiche ---------- */
 .person-head { display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: wrap; }
 .person-head h2 { margin: 0 0 .5rem; }
