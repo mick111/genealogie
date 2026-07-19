@@ -130,6 +130,7 @@ function githubErrorMessage(err) {
   if (err.status === 401) return 'Token GitHub refusé (expiré ou invalide).';
   if (err.status === 403) return 'Accès refusé : le token doit autoriser l\'écriture sur le dépôt (scope « repo » ou « Contents : Read and write »).';
   if (err.status === 404) return 'Dépôt ou fichier introuvable. Vérifie propriétaire, nom, branche et chemin.';
+  if (err.status === 409) return 'Conflit sur GitHub : le fichier a été modifié entre-temps. Recharge la page et réessaie.';
   return err.message || String(err);
 }
 
@@ -148,6 +149,19 @@ export async function publishTree(key, container, onStage = () => {}, treeId = g
 export async function publishFile(owner, repo, path, branch, token, content, message, onStage = () => {}) {
   const pathEnc = encodeURIComponent(path).replace(/%2F/g, '/');
   const refQ = `?ref=${encodeURIComponent(branch)}`;
+  const put = async (sha) => {
+    onStage('Envoi vers GitHub…');
+    await ghFetch(`/repos/${owner}/${repo}/contents/${pathEnc}`, token, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        content: utf8ToB64(content),
+        branch,
+        ...(sha ? { sha } : {}),
+      }),
+    });
+  };
   onStage('Lecture du fichier distant…');
   let sha;
   try {
@@ -156,17 +170,15 @@ export async function publishFile(owner, repo, path, branch, token, content, mes
   } catch (err) {
     if (err.status !== 404) throw err;
   }
-  onStage('Envoi vers GitHub…');
-  await ghFetch(`/repos/${owner}/${repo}/contents/${pathEnc}`, token, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message,
-      content: utf8ToB64(content),
-      branch,
-      ...(sha ? { sha } : {}),
-    }),
-  });
+  try {
+    await put(sha);
+  } catch (err) {
+    // Conflit : le fichier a changé sur GitHub entre la lecture et l'envoi (ex. registry.json).
+    if (err.status !== 409 || !sha) throw err;
+    onStage('Conflit distant, nouvelle tentative…');
+    const existing = await ghFetch(`/repos/${owner}/${repo}/contents/${pathEnc}${refQ}`, token);
+    await put(existing.sha);
+  }
 }
 
 export async function fetchTextFile(path) {
