@@ -161,18 +161,29 @@ async function publishData() {
   if (!confirm('Publier les modifications en ligne ?\n\nElles deviendront visibles pour les autres après quelques instants.')) return;
 
   const btn = $('#publish');
-  const prev = btn?.textContent;
-  if (btn) { btn.disabled = true; btn.textContent = 'Publication…'; }
+  const badge = $('#sync-status');
+  const prevBtn = btn?.textContent;
+  const setStatus = (s) => {
+    if (btn) btn.textContent = s;
+    if (badge?.classList.contains('sync-action')) badge.textContent = s;
+  };
+  if (btn) btn.disabled = true;
+  if (badge) badge.disabled = true;
+  setStatus('Publication…');
   try {
     await persist();
-    await publishTree(state.key, state.container, (s) => { if (btn) btn.textContent = s; }, TREE_ID);
+    await publishTree(state.key, state.container, setStatus, TREE_ID);
     localStorage.removeItem(storageKey(TREE_ID));
     updateSyncStatus();
     alert('Modifications publiées en ligne.\n\nLe site sera à jour dans quelques instants.');
   } catch (err) {
     alert('Publication impossible :\n' + githubErrorMessage(err));
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = prev || 'Publier'; }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prevBtn || 'Publier les modifications';
+    }
+    updateSyncStatus();
   }
 }
 
@@ -243,17 +254,26 @@ function openGithubSettings(onSaved) {
 function updateSyncStatus() {
   const el = $('#sync-status');
   if (!el) return;
+  const allowPublish = !authMode || canPublish();
   if (hasLocalEdits()) {
-    el.textContent = 'Modifs locales';
-    el.className = 'sync-badge unsynced';
-    el.title = 'Sauvegardées dans ce navigateur ; publie pour mettre le site en ligne à jour.';
+    el.hidden = false;
+    el.textContent = 'Modifications locales';
+    el.className = 'sync-badge unsynced' + (allowPublish ? ' sync-action' : '');
+    el.disabled = !allowPublish;
+    el.title = allowPublish
+      ? 'Publier les modifications en ligne'
+      : 'Sauvegardées dans ce navigateur ; seul un éditeur peut publier en ligne.';
   } else if (hasGithubToken()) {
+    el.hidden = false;
     el.textContent = 'À jour';
     el.className = 'sync-badge synced';
+    el.disabled = true;
     el.title = 'Synchronisé avec la version publiée.';
   } else {
+    el.hidden = true;
     el.textContent = '';
     el.className = 'sync-badge';
+    el.disabled = true;
     el.title = '';
   }
 }
@@ -686,6 +706,10 @@ function wireTopbar({ allowPublish, allowExport, withSearch }) {
   if (allowPublish) {
     $('#publish')?.addEventListener('click', publishData);
     $('#github-settings')?.addEventListener('click', () => openGithubSettings());
+    $('#sync-status')?.addEventListener('click', () => {
+      const badge = $('#sync-status');
+      if (badge?.classList.contains('sync-action') && !badge.disabled) publishData();
+    });
   }
   if (withSearch) {
     updateSyncStatus();
@@ -721,7 +745,7 @@ function showApp() {
     <header class="topbar">
       <a href="#/" class="brand" title="${treeName}">🌳 <span class="brand-text">${treeName}</span></a>
       ${search}
-      <span id="sync-status" class="sync-badge"></span>
+      <button type="button" id="sync-status" class="sync-badge" hidden aria-live="polite"></button>
       ${menu}
     </header>
     <main id="view"></main>`;

@@ -184,10 +184,17 @@ code {
 .sync-badge {
   font-size: .75rem; padding: .15rem .55rem; border-radius: 999px;
   white-space: nowrap; border: 1px solid var(--border); color: var(--muted);
+  font: inherit; background: transparent;
 }
-.sync-badge:empty { display: none; }
+.sync-badge[hidden] { display: none !important; }
 .sync-badge.unsynced { background: #fff3e0; color: #8a5a00; border-color: #e6c88a; }
 .sync-badge.synced { background: var(--bg); }
+.sync-badge.sync-action:not(:disabled) { cursor: pointer; }
+.sync-badge.sync-action:not(:disabled):hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+.sync-badge:disabled { cursor: default; }
 
 @media (prefers-color-scheme: dark) {
   .sync-badge.unsynced { background: #3d3018; color: #e6c88a; border-color: #6b5520; }
