@@ -2,7 +2,7 @@
 
 import { decryptTextContainer, decryptBytesWithKey, encryptText } from './crypto.js';
 import { parseGedcom, serializeGedcom, formatDate, yearOf, parseGedcomDateParts, mergeDatePartsFormValue, buildPersonName } from './gedcom.js';
-import { renderTree } from './tree.js';
+import { renderTree, computeTreeExtents } from './tree.js';
 import {
   detectGithubRepo, loadGithubMeta, hasGithubToken, saveGithubSettings,
   clearGithubSettings, publishTree, githubErrorMessage, loadBundledGithubConfig,
@@ -30,7 +30,7 @@ const state = {
 const imageCache = new Map();
 
 // Présentation de l'arbre : mode + nombre de générations (ajustables).
-const treeView = { mode: 'family', up: 2, down: 2 };
+const treeView = { mode: 'family', up: 2, down: 2, fit: false };
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -964,20 +964,84 @@ const TREE_MODES = [
   { id: 'fan', label: 'Éventail' },
 ];
 
+function applyTreeFit(container) {
+  const svg = container?.querySelector('.tree-svg');
+  if (!svg) return;
+  container.classList.toggle('is-fit', treeView.fit);
+  if (treeView.fit) {
+    svg.removeAttribute('width');
+    svg.removeAttribute('height');
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  } else {
+    const vb = svg.getAttribute('viewBox');
+    if (vb) {
+      const [, , w, h] = vb.split(/\s+/).map(Number);
+      if (w && h) {
+        svg.setAttribute('width', String(w));
+        svg.setAttribute('height', String(h));
+      }
+    }
+    svg.removeAttribute('preserveAspectRatio');
+  }
+}
+
 function renderTreeView(view, id) {
   const p = state.individuals.get(id);
+  const extents = () => computeTreeExtents(state, id);
+
+  const updateFullscreenBtn = () => {
+    const btn = view.querySelector('#tree-fullscreen');
+    const stage = view.querySelector('#tree-stage');
+    if (!btn || !stage) return;
+    const on = document.fullscreenElement === stage || stage.classList.contains('is-pseudo-fullscreen');
+    btn.textContent = on ? 'Quitter le plein écran' : 'Plein écran';
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  };
+
+  const toggleFullscreen = () => {
+    const stage = view.querySelector('#tree-stage');
+    if (!stage) return;
+    if (document.fullscreenElement === stage || stage.classList.contains('is-pseudo-fullscreen')) {
+      if (document.fullscreenElement === stage) document.exitFullscreen();
+      stage.classList.remove('is-pseudo-fullscreen');
+    } else {
+      const req = stage.requestFullscreen || stage.webkitRequestFullscreen;
+      if (req) {
+        req.call(stage).catch(() => stage.classList.add('is-pseudo-fullscreen'));
+      } else {
+        stage.classList.add('is-pseudo-fullscreen');
+      }
+    }
+    updateFullscreenBtn();
+  };
+
+  const showAllTree = () => {
+    const ext = extents();
+    if (treeView.mode === 'family') {
+      treeView.up = ext.maxUp;
+      treeView.down = ext.maxDown;
+    } else {
+      treeView.up = Math.max(1, ext.maxUp);
+    }
+    treeView.fit = true;
+    draw();
+  };
 
   const draw = () => {
-    // Onglets de mode
+    const ext = extents();
     view.querySelectorAll('.tree-tab').forEach((t) =>
       t.classList.toggle('active', t.dataset.mode === treeView.mode));
-    // Contrôles de générations selon le mode
+
     const controls = view.querySelector('#tree-controls');
     controls.innerHTML =
       (treeView.mode === 'family'
-        ? stepper('up', 'Ancêtres', 0, 5) + stepper('down', 'Descendants', 0, 5)
-        : stepper('up', 'Générations', 1, treeView.mode === 'fan' ? 7 : 6)) +
-      `<span class="muted">Clique une personne pour recentrer l'arbre.</span>`;
+        ? stepper('up', 'Ancêtres', 0, ext.maxUp) + stepper('down', 'Descendants', 0, ext.maxDown)
+        : stepper('up', 'Générations', 1, Math.max(1, ext.maxUp))) +
+      `<button type="button" class="btn btn-ghost tree-action" id="tree-show-all">Tout l'arbre</button>` +
+      `<button type="button" class="btn btn-ghost tree-action${treeView.fit ? ' active' : ''}" id="tree-fit" aria-pressed="${treeView.fit ? 'true' : 'false'}">Ajuster à l'écran</button>` +
+      `<button type="button" class="btn btn-ghost tree-action" id="tree-fullscreen" aria-pressed="false">Plein écran</button>` +
+      `<span class="muted">Cliquez une personne pour recentrer l'arbre.</span>`;
+
     controls.querySelectorAll('.step-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const k = btn.dataset.gen;
@@ -985,34 +1049,51 @@ function renderTreeView(view, id) {
         const min = Number(step.dataset.min), max = Number(step.dataset.max);
         treeView[k] = Math.max(min, Math.min(max, treeView[k] + Number(btn.dataset.delta)));
         controls.querySelector('#gen-' + k).textContent = treeView[k];
+        treeView.fit = false;
         drawTree();
       });
     });
+    controls.querySelector('#tree-show-all').addEventListener('click', showAllTree);
+    controls.querySelector('#tree-fit').addEventListener('click', () => {
+      treeView.fit = !treeView.fit;
+      drawTree();
+    });
+    controls.querySelector('#tree-fullscreen').addEventListener('click', toggleFullscreen);
+    updateFullscreenBtn();
     drawTree();
   };
 
-  const drawTree = () => renderTree(
-    $('#tree-container'), state, id,
-    (pid) => { location.hash = '#/tree/' + encodeURIComponent(pid); },
-    { mode: treeView.mode, up: treeView.up, down: treeView.down }
-  );
+  const drawTree = () => {
+    const container = $('#tree-container');
+    renderTree(
+      container, state, id,
+      (pid) => { location.hash = '#/tree/' + encodeURIComponent(pid); },
+      { mode: treeView.mode, up: treeView.up, down: treeView.down },
+    );
+    applyTreeFit(container);
+    view.querySelector('#tree-fit')?.classList.toggle('active', treeView.fit);
+    view.querySelector('#tree-fit')?.setAttribute('aria-pressed', treeView.fit ? 'true' : 'false');
+  };
 
   view.innerHTML = `
-    <section class="panel">
+    <section class="panel tree-panel">
       <div class="tree-head">
         <h2>${p ? escapeHtml(p.name) : ''}</h2>
         <a class="btn" href="#/person/${encodeURIComponent(id)}">← Fiche</a>
       </div>
-      <div class="tree-tabs">
-        ${TREE_MODES.map((m) => `<button class="tree-tab" data-mode="${m.id}">${m.label}</button>`).join('')}
+      <div id="tree-stage" class="tree-stage">
+        <div class="tree-tabs">
+          ${TREE_MODES.map((m) => `<button class="tree-tab" data-mode="${m.id}">${m.label}</button>`).join('')}
+        </div>
+        <div id="tree-controls" class="tree-controls"></div>
+        <div id="tree-container" class="tree-scroll"></div>
       </div>
-      <div id="tree-controls" class="tree-controls"></div>
-      <div id="tree-container" class="tree-scroll"></div>
     </section>`;
 
   view.querySelectorAll('.tree-tab').forEach((t) => {
-    t.addEventListener('click', () => { treeView.mode = t.dataset.mode; draw(); });
+    t.addEventListener('click', () => { treeView.mode = t.dataset.mode; treeView.fit = false; draw(); });
   });
+  view.querySelector('#tree-stage').addEventListener('fullscreenchange', updateFullscreenBtn);
   draw();
 }
 

@@ -360,8 +360,52 @@ main { max-width: 900px; margin: 0 auto; padding: 1rem; }
 .step-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
 .step b { min-width: 1ch; text-align: center; }
 
-.tree-scroll { overflow: auto; margin-top: 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.tree-stage { margin-top: .8rem; }
+.tree-scroll { overflow: auto; margin-top: .75rem; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); min-height: 280px; }
+.tree-scroll.is-fit {
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: min(70vh, 640px);
+}
+.tree-scroll.is-fit .tree-svg { width: 100%; height: 100%; max-height: min(70vh, 640px); padding: 8px; }
 .tree-svg { display: block; padding: 12px; min-width: 100%; }
+
+.tree-action { font-size: .85rem; padding: .35rem .75rem; }
+.tree-action.active { border-color: var(--accent); color: var(--accent-dark); font-weight: 600; }
+
+.tree-stage:fullscreen {
+  background: var(--bg);
+  padding: .75rem 1rem 1rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.tree-stage:fullscreen .tree-tabs { margin-top: 0; flex-shrink: 0; }
+.tree-stage:fullscreen .tree-controls { flex-shrink: 0; }
+.tree-stage:fullscreen .tree-scroll {
+  flex: 1;
+  min-height: 0;
+  margin-top: .5rem;
+}
+.tree-stage:fullscreen .tree-scroll.is-fit { min-height: 0; }
+.tree-stage:fullscreen .tree-scroll.is-fit .tree-svg { max-height: 100%; }
+
+.tree-stage.is-pseudo-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  margin: 0;
+  background: var(--bg);
+  padding: .75rem 1rem 1rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.tree-stage.is-pseudo-fullscreen .tree-scroll { flex: 1; min-height: 0; margin-top: .5rem; }
+.tree-stage.is-pseudo-fullscreen .tree-scroll.is-fit { min-height: 0; }
+.tree-stage.is-pseudo-fullscreen .tree-scroll.is-fit .tree-svg { max-height: 100%; }
 .tree-link { fill: none; stroke: var(--border); stroke-width: 2; }
 .tree-node { cursor: pointer; }
 .tree-node:focus { outline: none; }

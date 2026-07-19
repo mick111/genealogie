@@ -11,6 +11,24 @@ const BOX_W = 108, BOX_H = 64, H_GAP = 22, V_GAP = 52;
 const UNIT = BOX_W + H_GAP, ROW = BOX_H + V_GAP, MARGIN = 16;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// Profondeur réelle de l'arbre depuis une personne (ancêtres / descendants).
+export function computeTreeExtents(data, rootId) {
+  const R = relations(data);
+  let maxUp = 0;
+  (function walkUp(id, d) {
+    maxUp = Math.max(maxUp, d);
+    const { father, mother } = R.parentsOf(id);
+    if (father) walkUp(father, d + 1);
+    if (mother) walkUp(mother, d + 1);
+  })(rootId, 0);
+  let maxDown = 0;
+  (function walkDown(id, d) {
+    maxDown = Math.max(maxDown, d);
+    for (const c of R.childrenOf(id)) walkDown(c, d + 1);
+  })(rootId, 0);
+  return { maxUp, maxDown };
+}
+
 // -------------------------------------------------------------- dispatcher
 export function renderTree(container, data, rootId, onSelect, opts = {}) {
   const mode = opts.mode || 'family';
