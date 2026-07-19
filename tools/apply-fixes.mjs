@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Corrections manuelles après fusion GEDCOM.
-// Usage : node tools/apply-fixes.mjs [--in merged.ged] [--out merged.ged]
+// Usage : node tools/apply-fixes.mjs [--in imports/merged.ged] [--out imports/merged.ged]
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { parseGedcom, serializeGedcom } from '../js/gedcom.js';
+import { parseGedcom, serializeGedcom, buildPersonName } from '../js/gedcom.js';
 
 function parseArgs(argv) {
-  let inPath = 'merged.ged';
-  let outPath = 'merged.ged';
+  let inPath = 'imports/merged.ged';
+  let outPath = 'imports/merged.ged';
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--in' && argv[i + 1]) inPath = argv[++i];
     if (argv[i] === '--out' && argv[i + 1]) outPath = argv[++i];
@@ -81,7 +81,7 @@ function main() {
   const fabienne = individuals.get('@I422@');
   if (fabienne) {
     fabienne.birth = { date: '29 MAY 1963', place: fabienne.birth?.place || 'Tarbes' };
-    fabienne.name = [fabienne.given, fabienne.surname].filter(Boolean).join(' ');
+    fabienne.name = buildPersonName(fabienne);
   }
 
   // 2. René — décès Vic-en-Bigorre, 27 oct 2018
@@ -126,7 +126,7 @@ function main() {
   if (michael && !michael.birth?.date) {
     michael.birth = { date: '1 NOV 1988', place: 'Tarbes' };
     michael.given = 'Michaël';
-    michael.name = 'Michaël Mouchous';
+    michael.name = buildPersonName(michael);
   }
 
   // 6. Guiseppe Bordignon → sexe M
@@ -141,7 +141,7 @@ function main() {
     michele.given = 'Michèle';
     michele.surname = 'Court';
     michele.sex = 'F';
-    michele.name = 'Michèle Court';
+    michele.name = buildPersonName(michele);
   }
 
   // 8. Léa Dupuy — retirer la date de naissance
