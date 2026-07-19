@@ -131,7 +131,33 @@ function githubErrorMessage(err) {
   if (err.status === 403) return 'Accès refusé : le token doit autoriser l\'écriture sur le dépôt (scope « repo » ou « Contents : Read and write »).';
   if (err.status === 404) return 'Dépôt ou fichier introuvable. Vérifie propriétaire, nom, branche et chemin.';
   if (err.status === 409) return 'Conflit sur GitHub : le fichier a été modifié entre-temps. Recharge la page et réessaie.';
+  if (err.message === 'LOCK_HELD') return 'L\'arbre est déjà en édition par quelqu\'un d\'autre.';
   return err.message || String(err);
+}
+
+// Empreinte GitHub du tree.enc distant (détection de publication concurrente).
+export async function fetchRemoteTreeSha(key, treeId = getCurrentTreeId() || 'principal') {
+  const saved = loadGithubMeta();
+  if (!saved?.owner || !saved?.repo) return null;
+  const pathEnc = encodeURIComponent(defaultGithubPath(treeId)).replace(/%2F/g, '/');
+  const refQ = `?ref=${encodeURIComponent(saved.branch || 'main')}`;
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  let token = null;
+  if (key && hasGithubToken()) {
+    try { token = await getGithubToken(key); } catch (_) { /* ignore */ }
+  }
+  if (token) headers.Authorization = `Bearer ${token}`;
+  try {
+    const res = await fetch(`${API}/repos/${saved.owner}/${saved.repo}/contents/${pathEnc}${refQ}`, { headers });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return body.sha || null;
+  } catch (_) {
+    return null;
+  }
 }
 
 export async function publishTree(key, container, onStage = () => {}, treeId = getCurrentTreeId() || 'principal') {

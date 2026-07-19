@@ -6,12 +6,18 @@ import { renderTree, computeTreeExtents } from './tree.js';
 import {
   detectGithubRepo, loadGithubMeta, hasGithubToken, saveGithubSettings,
   clearGithubSettings, publishTree, githubErrorMessage, loadBundledGithubConfig,
+  fetchRemoteTreeSha,
 } from './github.js';
 import {
   authModeAvailable, renderAuthGate, renderAdminPanel, renderAccountPanel, renderPersonLink,
   clearAuthSession, decryptTreeContainer, isMkTree,
 } from './auth/boot.js';
 import { authSession, canEditPerson, canEditTree, canPublish, needsPersonLink, isAdmin } from './auth/session.js';
+import {
+  loadEditLock, acquireEditLock, extendEditLock, releaseEditLock,
+  isLockActive, HEARTBEAT_MS, POLL_MS,
+} from './auth/edit-lock.js';
+import { loadRegistry } from './auth/registry.js';
 import {
   TREE_ID, treeEncUrl, treeMediaDir, storageKey, defaultGithubPath,
 } from './trees.js';
@@ -24,6 +30,16 @@ const state = {
   key: null,            // clé AES dérivée (réutilisée pour les photos)
   individuals: null,    // Map id -> individu
   families: null,       // Map id -> famille
+  sessionTreeSha: null, // empreinte GitHub du tree.enc au chargement
+};
+
+const editLockState = {
+  lock: null,
+  globalLocked: false,
+  globalReason: '',
+  holdsLock: false,
+  pollTimer: null,
+  heartbeatTimer: null,
 };
 
 // Cache des URLs blob d'images déchiffrées (évite de re-déchiffrer).
@@ -138,6 +154,225 @@ function hasLocalEdits() {
   return !!localStorage.getItem(storageKey(TREE_ID));
 }
 
+function formatLockExpiry(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+  } catch (_) {
+    return iso;
+  }
+}
+
+function isGlobalLockBlocking() {
+  return authMode && editLockState.globalLocked && !isAdmin();
+}
+
+function isExclusiveLockBlocking() {
+  if (!authMode || isAdmin()) return false;
+  const lock = editLockState.lock;
+  if (!isLockActive(lock)) return false;
+  return lock.userId !== authSession.user?.id;
+}
+
+function canEditNow(personId = null) {
+  if (!authMode) return true;
+  if (isGlobalLockBlocking()) return false;
+  if (isExclusiveLockBlocking()) return false;
+  if (personId != null) return canEditPerson(personId);
+  return canEditTree();
+}
+
+function canPublishNow() {
+  if (!authMode) return true;
+  if (!canPublish()) return false;
+  if (isGlobalLockBlocking()) return false;
+  if (isExclusiveLockBlocking()) return false;
+  return true;
+}
+
+function stopLockHeartbeat() {
+  if (editLockState.heartbeatTimer) {
+    clearInterval(editLockState.heartbeatTimer);
+    editLockState.heartbeatTimer = null;
+  }
+}
+
+function stopEditLockPolling() {
+  if (editLockState.pollTimer) {
+    clearInterval(editLockState.pollTimer);
+    editLockState.pollTimer = null;
+  }
+}
+
+function startLockHeartbeat() {
+  stopLockHeartbeat();
+  if (!authMode || !editLockState.holdsLock) return;
+  editLockState.heartbeatTimer = setInterval(async () => {
+    if (!editLockState.holdsLock || !authSession.user) return;
+    try {
+      await extendEditLock(authSession.user, state.key);
+      await refreshEditLockState();
+    } catch (_) { /* ignore */ }
+  }, HEARTBEAT_MS);
+}
+
+function startEditLockPolling() {
+  stopEditLockPolling();
+  if (!authMode) return;
+  editLockState.pollTimer = setInterval(() => { void refreshEditLockState(); }, POLL_MS);
+}
+
+async function refreshEditLockState() {
+  if (!authMode) return;
+  try {
+    const reg = await loadRegistry();
+    editLockState.globalLocked = !!reg.treeEditLocked;
+    editLockState.globalReason = reg.treeEditLockedReason || '';
+    editLockState.lock = await loadEditLock();
+    const u = authSession.user;
+    editLockState.holdsLock = !!(u && isLockActive(editLockState.lock) && editLockState.lock.userId === u.id);
+    if (!editLockState.holdsLock) stopLockHeartbeat();
+    else if (!editLockState.heartbeatTimer) startLockHeartbeat();
+    renderLockBanner();
+    updateSyncStatus();
+  } catch (_) { /* ignore */ }
+}
+
+function renderLockBanner() {
+  const el = $('#lock-banner');
+  if (!el || !authMode) return;
+  const parts = [];
+  if (editLockState.globalLocked) {
+    const suffix = isAdmin() ? ' (admin : édition autorisée)' : ' — lecture seule';
+    const reason = editLockState.globalReason
+      ? ` : ${escapeHtml(editLockState.globalReason)}`
+      : '';
+    parts.push(`<span class="lock-banner-msg">🔒 Arbre verrouillé${reason}${suffix}</span>`);
+  }
+  if (isLockActive(editLockState.lock)) {
+    if (editLockState.holdsLock) {
+      parts.push(
+        `<span class="lock-banner-msg">✏️ Vous éditez l'arbre (verrou jusqu'à ${escapeHtml(formatLockExpiry(editLockState.lock.expiresAt))})</span>`,
+        '<button type="button" class="btn btn-ghost lock-banner-btn" id="release-lock">Libérer</button>',
+      );
+    } else {
+      parts.push(
+        `<span class="lock-banner-msg">✏️ ${escapeHtml(editLockState.lock.displayName)} édite l'arbre</span>`,
+      );
+      if (isAdmin()) {
+        parts.push('<button type="button" class="btn btn-ghost lock-banner-btn" id="force-release-lock">Libérer le verrou</button>');
+      }
+    }
+  } else if (canEditTree() && !isGlobalLockBlocking()) {
+    parts.push('<button type="button" class="btn btn-ghost lock-banner-btn" id="take-lock">Prendre le verrou d\'édition</button>');
+  }
+  if (!parts.length) {
+    el.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = parts.join('');
+  $('#take-lock')?.addEventListener('click', () => { void takeEditLock(false); });
+  $('#release-lock')?.addEventListener('click', () => { void releaseMyEditLock(); });
+  $('#force-release-lock')?.addEventListener('click', () => { void forceReleaseEditLock(); });
+}
+
+async function takeEditLock(quiet) {
+  if (!authSession.user) return false;
+  if (isGlobalLockBlocking()) {
+    if (!quiet) alert('L\'arbre est verrouillé par l\'administrateur.');
+    return false;
+  }
+  if (isExclusiveLockBlocking()) {
+    if (!quiet) alert(`L'arbre est en édition par ${editLockState.lock.displayName}.`);
+    return false;
+  }
+  if (editLockState.holdsLock) return true;
+  if (!quiet && !confirm('Prendre le verrou d\'édition ? Les autres éditeurs seront en lecture seule.')) return false;
+  try {
+    await acquireEditLock(authSession.user, state.key);
+    await refreshEditLockState();
+    startLockHeartbeat();
+    return true;
+  } catch (err) {
+    await refreshEditLockState();
+    if (!quiet) alert(err.message === 'LOCK_HELD'
+      ? `Verrou déjà pris par ${err.lock?.displayName || 'un autre éditeur'}.`
+      : (githubErrorMessage(err) || err.message));
+    return false;
+  }
+}
+
+async function releaseMyEditLock() {
+  if (!editLockState.holdsLock) return;
+  if (!confirm('Libérer le verrou d\'édition ?')) return;
+  try {
+    await releaseEditLock(state.key);
+    stopLockHeartbeat();
+    await refreshEditLockState();
+  } catch (err) {
+    alert(githubErrorMessage(err) || err.message);
+  }
+}
+
+async function forceReleaseEditLock() {
+  if (!isAdmin()) return;
+  if (!confirm('Libérer le verrou d\'édition de force ?')) return;
+  try {
+    await releaseEditLock(state.key);
+    stopLockHeartbeat();
+    await refreshEditLockState();
+  } catch (err) {
+    alert(githubErrorMessage(err) || err.message);
+  }
+}
+
+async function ensureEditAccess(personId) {
+  if (!canEditNow(personId)) {
+    if (isGlobalLockBlocking()) {
+      alert(`Arbre verrouillé par l'administrateur${editLockState.globalReason ? ` : ${editLockState.globalReason}` : ''}.`);
+    } else if (isExclusiveLockBlocking()) {
+      alert(`L'arbre est en édition par ${editLockState.lock.displayName}.`);
+    } else {
+      alert('Modification non autorisée.');
+    }
+    return false;
+  }
+  if (authMode && !isAdmin() && (canEditTree() || (personId && canEditPerson(personId)))) {
+    if (!editLockState.holdsLock && !isLockActive(editLockState.lock)) {
+      return takeEditLock(false);
+    }
+    if (isExclusiveLockBlocking()) {
+      alert(`L'arbre est en édition par ${editLockState.lock.displayName}.`);
+      return false;
+    }
+  }
+  return true;
+}
+
+async function initRemoteTreeBaseline() {
+  state.sessionTreeSha = await fetchRemoteTreeSha(state.key, TREE_ID);
+}
+
+async function confirmRemoteTreePublish() {
+  const remoteSha = await fetchRemoteTreeSha(state.key, TREE_ID);
+  if (!remoteSha || !state.sessionTreeSha || remoteSha === state.sessionTreeSha) return true;
+  return confirm(
+    'La version en ligne a changé depuis votre connexion (quelqu\'un a peut-être publié).\n\n'
+    + 'Publier maintenant écrasera ces changements.\n\nContinuer quand même ?',
+  );
+}
+
+function initEditLockSystem() {
+  if (!authMode) return;
+  if (!window._genEditLockWired) {
+    window._genEditLockWired = true;
+    window.addEventListener('gen-edit-lock-changed', () => { void refreshEditLockState(); });
+  }
+  void refreshEditLockState().then(() => startEditLockPolling());
+}
+
 // Télécharge le fichier chiffré courant (secours si la publication GitHub échoue).
 async function exportData() {
   const text = serializeGedcom(state.individuals, state.families);
@@ -153,12 +388,19 @@ async function exportData() {
 }
 
 async function publishData() {
+  if (!canPublishNow()) {
+    alert(isGlobalLockBlocking()
+      ? 'Publication bloquée : arbre verrouillé par l\'administrateur.'
+      : 'Publication bloquée : un autre éditeur détient le verrou.');
+    return;
+  }
   const saved = loadGithubMeta();
   if (!saved?.owner || !saved?.repo || !hasGithubToken()) {
     openGithubSettings(() => publishData());
     return;
   }
   if (!confirm('Publier les modifications en ligne ?\n\nElles deviendront visibles pour les autres après quelques instants.')) return;
+  if (!(await confirmRemoteTreePublish())) return;
 
   const btn = $('#publish');
   const badge = $('#sync-status');
@@ -174,6 +416,12 @@ async function publishData() {
     await persist();
     await publishTree(state.key, state.container, setStatus, TREE_ID);
     localStorage.removeItem(storageKey(TREE_ID));
+    if (editLockState.holdsLock) {
+      try { await releaseEditLock(state.key); } catch (_) { /* ignore */ }
+      stopLockHeartbeat();
+    }
+    state.sessionTreeSha = await fetchRemoteTreeSha(state.key, TREE_ID);
+    await refreshEditLockState();
     updateSyncStatus();
     alert('Modifications publiées en ligne.\n\nLe site sera à jour dans quelques instants.');
   } catch (err) {
@@ -254,7 +502,7 @@ function openGithubSettings(onSaved) {
 function updateSyncStatus() {
   const el = $('#sync-status');
   if (!el) return;
-  const allowPublish = !authMode || canPublish();
+  const allowPublish = canPublishNow();
   if (hasLocalEdits()) {
     el.hidden = false;
     el.textContent = 'Modifications locales';
@@ -262,7 +510,11 @@ function updateSyncStatus() {
     el.disabled = !allowPublish;
     el.title = allowPublish
       ? 'Publier les modifications en ligne'
-      : 'Sauvegardées dans ce navigateur ; seul un éditeur peut publier en ligne.';
+      : isGlobalLockBlocking()
+        ? 'Arbre verrouillé par l\'administrateur.'
+        : isExclusiveLockBlocking()
+          ? `Arbre en édition par ${editLockState.lock.displayName}.`
+          : 'Sauvegardées dans ce navigateur ; publication indisponible.';
   } else if (hasGithubToken()) {
     el.hidden = false;
     el.textContent = 'À jour';
@@ -521,6 +773,7 @@ function openForm(title, initial, onSubmit, extraHtml = '') {
 // Applique une modification puis persiste et navigue vers `goId`.
 async function applyEdit(fn, goId) {
   const id = fn();
+  if (!(await ensureEditAccess(goId || id))) return;
   await persist();
   updateSyncStatus();
   const target = goId || id;
@@ -619,6 +872,15 @@ function renderLogin(errorMsg) {
 
 function logout() {
   sessionStorage.removeItem('gen_pass');
+  if (editLockState.holdsLock) {
+    void releaseEditLock(state.key).catch(() => {});
+  }
+  stopLockHeartbeat();
+  stopEditLockPolling();
+  editLockState.lock = null;
+  editLockState.globalLocked = false;
+  editLockState.globalReason = '';
+  editLockState.holdsLock = false;
   clearAuthSession();
   for (const url of imageCache.values()) URL.revokeObjectURL(url);
   imageCache.clear();
@@ -734,7 +996,7 @@ function showApp() {
     renderPersonLink($('#view'), escapeHtml, state, persist);
     return;
   }
-  const allowPublish = !authMode || canPublish();
+  const allowPublish = canPublishNow();
   const allowExport = allowPublish || hasLocalEdits();
   const treeName = 'Généalogie';
   const { search, menu } = topbarMenuItems({ allowPublish, allowExport, withSearch: true });
@@ -748,9 +1010,12 @@ function showApp() {
       <button type="button" id="sync-status" class="sync-badge" hidden aria-live="polite"></button>
       ${menu}
     </header>
+    <div id="lock-banner" class="lock-banner" hidden></div>
     <main id="view"></main>`;
   wireTopbar({ allowPublish, allowExport, withSearch: true });
   route();
+  initEditLockSystem();
+  void initRemoteTreeBaseline();
 }
 
 // -------------------------------------------------------------------- routing
@@ -868,8 +1133,8 @@ function renderPerson(view, id) {
            data-placeholder="portrait placeholder" data-icon="${icon}" alt="${escapeHtml(p.name)}" />`)
     : `<div class="portrait placeholder">${icon}</div>`;
 
-  const canEdit = !authMode || canEditPerson(id);
-  const canEditFam = !authMode || canEditTree();
+  const canEdit = canEditNow(id);
+  const canEditFam = canEditNow() && (!authMode || canEditTree());
 
   view.innerHTML = `
     <section class="panel person">
@@ -917,6 +1182,7 @@ function renderPerson(view, id) {
   }, (d) => applyEdit(() => { editPerson(id, d); return id; }, id)));
   act('delete', async () => {
     if (!confirm(`Supprimer « ${p.name} » de l'arbre ?\nLes liens familiaux vers cette personne seront retirés.`)) return;
+    if (!(await ensureEditAccess(id))) return;
     deletePerson(id);
     await persist();
     updateSyncStatus();
@@ -986,12 +1252,14 @@ const TREE_MODES = [
   { id: 'family', label: 'Famille' },
   { id: 'pedigree', label: 'Pedigree' },
   { id: 'fan', label: 'Éventail' },
+  { id: 'full', label: 'Complet' },
 ];
 
 function applyTreeFit(container) {
   const svg = container?.querySelector('.tree-svg');
   if (!svg) return;
   container.classList.toggle('is-fit', treeView.fit);
+  container.classList.toggle('is-fit-full', treeView.fit && treeView.mode === 'full');
   if (treeView.fit) {
     svg.removeAttribute('width');
     svg.removeAttribute('height');
@@ -1040,13 +1308,7 @@ function renderTreeView(view, id) {
   };
 
   const showAllTree = () => {
-    const ext = extents();
-    if (treeView.mode === 'family') {
-      treeView.up = ext.maxUp;
-      treeView.down = ext.maxDown;
-    } else {
-      treeView.up = Math.max(1, ext.maxUp);
-    }
+    treeView.mode = 'full';
     treeView.fit = true;
     draw();
   };
@@ -1057,14 +1319,19 @@ function renderTreeView(view, id) {
       t.classList.toggle('active', t.dataset.mode === treeView.mode));
 
     const controls = view.querySelector('#tree-controls');
-    controls.innerHTML =
-      (treeView.mode === 'family'
-        ? stepper('up', 'Ancêtres', 0, ext.maxUp) + stepper('down', 'Descendants', 0, ext.maxDown)
-        : stepper('up', 'Générations', 1, Math.max(1, ext.maxUp))) +
+    const count = state.individuals.size;
+    const commonActions =
       `<button type="button" class="btn btn-ghost tree-action" id="tree-show-all">Tout l'arbre</button>` +
       `<button type="button" class="btn btn-ghost tree-action${treeView.fit ? ' active' : ''}" id="tree-fit" aria-pressed="${treeView.fit ? 'true' : 'false'}">Ajuster à l'écran</button>` +
-      `<button type="button" class="btn btn-ghost tree-action" id="tree-fullscreen" aria-pressed="false">Plein écran</button>` +
-      `<span class="muted">Cliquez une personne pour recentrer l'arbre.</span>`;
+      `<button type="button" class="btn btn-ghost tree-action" id="tree-fullscreen" aria-pressed="false">Plein écran</button>`;
+    controls.innerHTML =
+      (treeView.mode === 'full'
+        ? `<span class="muted">${count} personne${count > 1 ? 's' : ''} — vue complète.</span>`
+        : treeView.mode === 'family'
+          ? stepper('up', 'Ancêtres', 0, ext.maxUp) + stepper('down', 'Descendants', 0, ext.maxDown)
+          : stepper('up', 'Générations', 1, Math.max(1, ext.maxUp))) +
+      commonActions +
+      `<span class="muted">${treeView.mode === 'full' ? 'Cliquez une personne pour ouvrir sa branche.' : 'Cliquez une personne pour recentrer l\'arbre.'}</span>`;
 
     controls.querySelectorAll('.step-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1091,7 +1358,15 @@ function renderTreeView(view, id) {
     const container = $('#tree-container');
     renderTree(
       container, state, id,
-      (pid) => { location.hash = '#/tree/' + encodeURIComponent(pid); },
+      (pid) => {
+        if (treeView.mode === 'full') {
+          treeView.mode = 'family';
+          treeView.up = 2;
+          treeView.down = 2;
+          treeView.fit = false;
+        }
+        location.hash = '#/tree/' + encodeURIComponent(pid);
+      },
       { mode: treeView.mode, up: treeView.up, down: treeView.down },
     );
     applyTreeFit(container);
@@ -1115,7 +1390,11 @@ function renderTreeView(view, id) {
     </section>`;
 
   view.querySelectorAll('.tree-tab').forEach((t) => {
-    t.addEventListener('click', () => { treeView.mode = t.dataset.mode; treeView.fit = false; draw(); });
+    t.addEventListener('click', () => {
+      treeView.mode = t.dataset.mode;
+      treeView.fit = t.dataset.mode === 'full';
+      draw();
+    });
   });
   view.querySelector('#tree-stage').addEventListener('fullscreenchange', updateFullscreenBtn);
   draw();

@@ -46,5 +46,6 @@ export function authPaths(site) {
   return {
     pending: site.pendingPath || 'data/auth/pending.json',
     registry: site.registryPath || 'data/auth/registry.json',
+    editLock: site.editLockPath || 'data/auth/edit-lock.json',
   };
 }

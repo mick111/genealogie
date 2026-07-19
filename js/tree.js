@@ -3,6 +3,7 @@
 //                  dessous, conjoint·e à droite, frères/sœurs à gauche)
 //   • 'pedigree' : ascendants HORIZONTAUX (focus à gauche, ancêtres à droite)
 //   • 'fan'      : éventail radial des ancêtres
+//   • 'full'     : toutes les personnes par génération
 // Clic sur une personne -> onSelect(id) (recentre l'arbre).
 
 import { yearOf } from './gedcom.js';
@@ -34,6 +35,7 @@ export function renderTree(container, data, rootId, onSelect, opts = {}) {
   const mode = opts.mode || 'family';
   container.innerHTML = '';
   if (!data.individuals.get(rootId)) { container.textContent = 'Personne introuvable.'; return; }
+  if (mode === 'full') return renderFullTree(container, data, rootId, onSelect);
   if (mode === 'pedigree') return renderPedigree(container, data, rootId, onSelect, opts.up ?? 4);
   if (mode === 'fan') return renderFan(container, data, rootId, onSelect, opts.up ?? 5);
   return renderFamily(container, data, rootId, onSelect, opts.up ?? 2, opts.down ?? 2);
@@ -168,6 +170,164 @@ function renderFamily(container, data, rootId, onSelect, maxUp, maxDown) {
     const key = b.id + '@' + b.row + '@' + b.xU; if (seen.has(key)) continue; seen.add(key);
     const person = individuals.get(b.id); if (!person) continue;
     svg.appendChild(nodeBox(person, b.xU * UNIT + dx, b.row * ROW + dy, b.focus, () => onSelect(b.id)));
+  }
+  container.appendChild(svg);
+}
+
+// ============================================================== FULL (toutes les personnes)
+const FULL_BOX_W = 76, FULL_BOX_H = 50, FULL_H_GAP = 10, FULL_V_GAP = 36;
+const FULL_UNIT = FULL_BOX_W + FULL_H_GAP, FULL_ROW = FULL_BOX_H + FULL_V_GAP;
+const COMP_GAP = 3; // lignes vides entre composantes déconnectées
+
+function connectedComponents(data, R) {
+  const visited = new Set();
+  const out = [];
+  for (const id of data.individuals.keys()) {
+    if (visited.has(id)) continue;
+    const comp = [];
+    const queue = [id];
+    visited.add(id);
+    while (queue.length) {
+      const cur = queue.shift();
+      comp.push(cur);
+      const { father, mother } = R.parentsOf(cur);
+      const neighbors = [
+        ...R.spousesOf(cur),
+        ...R.childrenOf(cur),
+        ...R.siblingsOf(cur),
+        father,
+        mother,
+      ].filter((n) => n && !visited.has(n));
+      for (const n of neighbors) {
+        visited.add(n);
+        queue.push(n);
+      }
+    }
+    out.push(comp);
+  }
+  out.sort((a, b) => b.length - a.length);
+  return out;
+}
+
+function assignGenerations(ids, data, R) {
+  const idSet = new Set(ids);
+  const gen = new Map();
+  for (const id of ids) {
+    const { father, mother } = R.parentsOf(id);
+    const hasParent = (father && idSet.has(father)) || (mother && idSet.has(mother));
+    if (!hasParent) gen.set(id, 0);
+  }
+  let changed = true;
+  let guard = 0;
+  while (changed && guard++ < ids.length * 3) {
+    changed = false;
+    for (const id of ids) {
+      const { father, mother } = R.parentsOf(id);
+      const pg = Math.max(
+        father && idSet.has(father) ? (gen.get(father) ?? -1) : -1,
+        mother && idSet.has(mother) ? (gen.get(mother) ?? -1) : -1,
+      );
+      if (pg >= 0) {
+        const ng = pg + 1;
+        if (gen.get(id) !== ng) { gen.set(id, ng); changed = true; }
+      }
+      for (const sid of R.spousesOf(id)) {
+        if (!idSet.has(sid)) continue;
+        const g = gen.get(id), sg = gen.get(sid);
+        if (g != null && sg != null && g !== sg) {
+          const m = Math.max(g, sg);
+          gen.set(id, m); gen.set(sid, m); changed = true;
+        } else if (g != null && sg == null) { gen.set(sid, g); changed = true; }
+        else if (sg != null && g == null) { gen.set(id, sg); changed = true; }
+      }
+    }
+  }
+  for (const id of ids) if (!gen.has(id)) gen.set(id, 0);
+  return gen;
+}
+
+function renderFullTree(container, data, rootId, onSelect) {
+  const { individuals, families } = data;
+  const R = relations(data);
+  const components = connectedComponents(data, R);
+  const boxes = [];
+  const links = [];
+  let rowOffset = 0;
+
+  const cxOf = (xU, unit) => xU * unit + FULL_BOX_W / 2;
+  const familyLinkFull = (parentXs, childXs, parentRow, childRow, unit, drawBar) => {
+    const pBot = parentRow * FULL_ROW + FULL_BOX_H;
+    const cTop = childRow * FULL_ROW;
+    const busY = (pBot + cTop) / 2;
+    let coupleMid;
+    if (parentXs.length === 2) {
+      const a = Math.min(parentXs[0], parentXs[1]), b = Math.max(parentXs[0], parentXs[1]);
+      if (drawBar) links.push({ marr: true, d: `M ${a * unit + FULL_BOX_W} ${parentRow * FULL_ROW + FULL_BOX_H / 2} H ${b * unit}` });
+      coupleMid = (parentXs[0] + parentXs[1]) / 2;
+    } else coupleMid = parentXs[0];
+    links.push({ d: `M ${cxOf(coupleMid, unit)} ${pBot} V ${busY}` });
+    const cxs = childXs.map((x) => cxOf(x, unit));
+    if (cxs.length > 1) links.push({ d: `M ${Math.min(...cxs)} ${busY} H ${Math.max(...cxs)}` });
+    for (const cx of cxs) links.push({ d: `M ${cx} ${cTop} V ${busY}` });
+  };
+
+  for (const ids of components) {
+    const genMap = assignGenerations(ids, data, R);
+    let maxLocal = 0;
+    for (const g of genMap.values()) maxLocal = Math.max(maxLocal, g);
+    const byGen = new Map();
+    for (const id of ids) {
+      const row = rowOffset + genMap.get(id);
+      if (!byGen.has(row)) byGen.set(row, []);
+      byGen.get(row).push(id);
+    }
+    const pos = new Map();
+    for (const [row, rowIds] of [...byGen.entries()].sort((a, b) => a[0] - b[0])) {
+      rowIds.sort((a, b) => {
+        const pa = individuals.get(a), pb = individuals.get(b);
+        return (pa?.surname || '').localeCompare(pb?.surname || '', 'fr')
+          || (pa?.given || '').localeCompare(pb?.given || '', 'fr');
+      });
+      rowIds.forEach((id, i) => {
+        const b = { id, xU: i, row, focus: id === rootId };
+        boxes.push(b);
+        pos.set(id, b);
+      });
+    }
+    const idSet = new Set(ids);
+    for (const fam of families.values()) {
+      const parentIds = [fam.husb, fam.wife].filter((id) => id && idSet.has(id));
+      const childIds = fam.chil.filter((id) => id && idSet.has(id));
+      if (!parentIds.length || !childIds.length) continue;
+      const parentXs = parentIds.map((id) => pos.get(id)?.xU).filter((x) => x != null);
+      const childXs = childIds.map((id) => pos.get(id)?.xU).filter((x) => x != null);
+      if (!parentXs.length || !childXs.length) continue;
+      const parentRow = Math.max(...parentIds.map((id) => pos.get(id).row));
+      const childRow = Math.min(...childIds.map((id) => pos.get(id).row));
+      if (childRow <= parentRow) continue;
+      familyLinkFull(parentXs, childXs, parentRow, childRow, FULL_UNIT, parentIds.length === 2);
+    }
+    rowOffset += maxLocal + 1 + COMP_GAP;
+  }
+
+  if (!boxes.length) {
+    container.textContent = 'Aucune personne à afficher.';
+    return;
+  }
+
+  const minX = Math.min(...boxes.map((b) => b.xU)), maxX = Math.max(...boxes.map((b) => b.xU));
+  const minR = Math.min(...boxes.map((b) => b.row)), maxR = Math.max(...boxes.map((b) => b.row));
+  const dx = -minX * FULL_UNIT + MARGIN, dy = -minR * FULL_ROW + MARGIN;
+  const width = (maxX - minX) * FULL_UNIT + FULL_BOX_W + MARGIN * 2;
+  const height = (maxR - minR) * FULL_ROW + FULL_BOX_H + MARGIN * 2;
+  const dims = { w: FULL_BOX_W, h: FULL_BOX_H, nameLen: 10 };
+
+  const svg = el('svg', { class: 'tree-svg tree-svg-full', viewBox: `0 0 ${width} ${height}`, width, height });
+  for (const lk of links) svg.appendChild(el('path', { class: lk.marr ? 'tree-link tree-marr' : 'tree-link', d: shiftPath(lk.d, dx, dy) }));
+  for (const b of boxes) {
+    const person = individuals.get(b.id);
+    if (!person) continue;
+    svg.appendChild(nodeBox(person, b.xU * FULL_UNIT + dx, b.row * FULL_ROW + dy, b.focus, () => onSelect(b.id), dims));
   }
   container.appendChild(svg);
 }
@@ -318,19 +478,22 @@ function sector(cx, cy, rIn, rOut, a0, a1) {
 const f = (n) => n.toFixed(1);
 
 // -------------------------------------------------------------- utils communs
-function nodeBox(person, x, y, isFocus, onSelect) {
+function nodeBox(person, x, y, isFocus, onSelect, dims = null) {
+  const w = dims?.w ?? BOX_W, h = dims?.h ?? BOX_H;
+  const nameLen = dims?.nameLen ?? 13;
   const sexCls = person.sex === 'F' ? 'sex-f' : person.sex === 'M' ? 'sex-m' : 'sex-u';
   const g = el('g', { class: 'tree-node' + (isFocus ? ' is-root' : ''), transform: `translate(${x}, ${y})`, tabindex: '0', role: 'button' });
-  g.appendChild(el('rect', { class: `tree-box ${sexCls}`, width: BOX_W, height: BOX_H, rx: 8 }));
+  g.appendChild(el('rect', { class: `tree-box ${sexCls}`, width: w, height: h, rx: 8 }));
   const given = (person.given || person.name || '').trim();
   const surname = (person.marriedSurname || person.surname || '').trim();
   const birthName = person.marriedSurname && person.surname ? person.surname : '';
-  if (given) g.appendChild(el('text', { class: 'tree-given', x: 8, y: 16 }, truncate(given, 13)));
-  if (surname) g.appendChild(el('text', { class: 'tree-surname', x: 8, y: 30 }, truncate(surname, 13)));
-  else if (!given) g.appendChild(el('text', { class: 'tree-given', x: 8, y: 24 }, truncate(person.name, 13)));
+  const yGiven = h <= 52 ? 14 : 16, ySur = h <= 52 ? 26 : 30, ySub = h <= 52 ? 42 : 50;
+  if (given) g.appendChild(el('text', { class: 'tree-given', x: 6, y: yGiven }, truncate(given, nameLen)));
+  if (surname) g.appendChild(el('text', { class: 'tree-surname', x: 6, y: ySur }, truncate(surname, nameLen)));
+  else if (!given) g.appendChild(el('text', { class: 'tree-given', x: 6, y: (yGiven + ySur) / 2 }, truncate(person.name, nameLen)));
   const sub = lifespan(person);
-  if (sub) g.appendChild(el('text', { class: 'tree-dates', x: 8, y: 50 }, sub));
-  else if (birthName) g.appendChild(el('text', { class: 'tree-dates', x: 8, y: 50 }, `née ${truncate(birthName, 11)}`));
+  if (sub) g.appendChild(el('text', { class: 'tree-dates', x: 6, y: ySub }, sub));
+  else if (birthName) g.appendChild(el('text', { class: 'tree-dates', x: 6, y: ySub }, `née ${truncate(birthName, nameLen - 2)}`));
   g.addEventListener('click', onSelect);
   g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } });
   return g;

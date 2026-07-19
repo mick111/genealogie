@@ -15,6 +15,9 @@ import {
 import { importRawAesKey } from '../crypto.js';
 import { decryptTreeContainer, isMkTree } from './tree-lock.js';
 import { githubErrorMessage } from '../github.js';
+import {
+  loadEditLock, releaseEditLock, setGlobalTreeLock, isLockActive, isGlobalTreeLocked,
+} from './edit-lock.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -470,11 +473,31 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
   }
   const pending = (await loadPending()).pending;
   const registry = await loadRegistry();
+  const editLock = await loadEditLock();
+  const globalLocked = isGlobalTreeLocked(registry);
   const accounts = registry.users
     .filter((u) => u.status === 'approved')
     .sort((a, b) => a.displayName.localeCompare(b.displayName, 'fr'));
   view.innerHTML = `
     ${passkeySectionHtml()}
+    <section class="panel">
+      <h2>Verrouillage de l'arbre</h2>
+      <p class="muted">Verrou global : tous les éditeurs passent en lecture seule (vous pouvez toujours éditer).
+      Verrou exclusif : un seul éditeur à la fois via le bandeau en haut de l'écran.</p>
+      <p class="muted">${globalLocked
+        ? `🔒 Verrou global actif${registry.treeEditLockedReason ? ` — ${escapeHtml(registry.treeEditLockedReason)}` : ''}.`
+        : 'Verrou global inactif.'}</p>
+      <p class="muted">${isLockActive(editLock)
+        ? `✏️ Verrou exclusif : ${escapeHtml(editLock.displayName)} (jusqu'à ${escapeHtml(new Date(editLock.expiresAt).toLocaleString('fr-FR'))}).`
+        : 'Aucun verrou exclusif actif.'}</p>
+      <label>Raison du verrou global (optionnel)
+        <input type="text" id="global-lock-reason" value="${escapeHtml(registry.treeEditLockedReason || '')}" placeholder="ex. Import GEDCOM en cours">
+      </label>
+      <div class="actions-row" style="margin-top:.75rem">
+        <button type="button" class="btn" id="toggle-global-lock">${globalLocked ? 'Déverrouiller l\'arbre' : 'Verrouiller l\'arbre (global)'}</button>
+        ${isLockActive(editLock) ? '<button type="button" class="btn btn-ghost" id="admin-release-edit-lock">Libérer le verrou exclusif</button>' : ''}
+      </div>
+    </section>
     <section class="panel">
       <h2>Comptes</h2>
       <p class="muted">${accounts.length} compte(s) approuvé(s).</p>
@@ -519,6 +542,34 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
     </section>`;
 
   wireRecreatePasskey(view, escapeHtml);
+
+  view.querySelector('#toggle-global-lock')?.addEventListener('click', async () => {
+    const reason = view.querySelector('#global-lock-reason')?.value || '';
+    const btn = view.querySelector('#toggle-global-lock');
+    btn.disabled = true;
+    try {
+      await setGlobalTreeLock(!globalLocked, reason, authSession.user);
+      window.dispatchEvent(new Event('gen-edit-lock-changed'));
+      renderAdminPanel(view, escapeHtml, state, persist);
+    } catch (err) {
+      alert(githubErrorMessage(err) || err.message || String(err));
+      btn.disabled = false;
+    }
+  });
+
+  view.querySelector('#admin-release-edit-lock')?.addEventListener('click', async () => {
+    if (!confirm('Libérer le verrou exclusif de force ?')) return;
+    const btn = view.querySelector('#admin-release-edit-lock');
+    btn.disabled = true;
+    try {
+      await releaseEditLock(authSession.mkKey || state.key);
+      window.dispatchEvent(new Event('gen-edit-lock-changed'));
+      renderAdminPanel(view, escapeHtml, state, persist);
+    } catch (err) {
+      alert(githubErrorMessage(err) || err.message || String(err));
+      btn.disabled = false;
+    }
+  });
 
   view.querySelectorAll('[data-approve]').forEach((btn) => {
       btn.addEventListener('click', async () => {

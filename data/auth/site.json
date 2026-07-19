@@ -3,5 +3,6 @@
   "repoId": "genealogie",
   "regSalt": "l76M5BNAkm/nO4AihjOx4A==",
   "pendingPath": "data/auth/pending.json",
-  "registryPath": "data/auth/registry.json"
+  "registryPath": "data/auth/registry.json",
+  "editLockPath": "data/auth/edit-lock.json"
 }
