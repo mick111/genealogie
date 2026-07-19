@@ -18,6 +18,15 @@
       "setupPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXFwfpwczuE4HAT2NVreCrjF+LfekDpjvHydngNyFp5AjAcKh06cVIHJmSjagFWOekNphbu/z0SklN3mbr3SYtg==",
       "createdAt": "2026-07-19T20:43:40.416Z",
       "status": "pending"
+    },
+    {
+      "id": "765d8bcc-50b5-499b-95d1-33c19c72d968",
+      "displayName": "Jean-Michel",
+      "credentialId": "vOkpMu9VSE744uecZK7PfA==",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHgkBSBQYJD/70bRIXRt32tMMZ+IukIWvc9zGLPWSbG2WSnmg/85V0DuKmyNCeyYa8pRKlKsFvLu4Jp6a2buvTQ==",
+      "setupPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHP6Hvoj+eVlTa2zcCKByk4agteqWk6mcBQBL8ieM0Hxw6X0SQrl1a0YupI5H/0rTuDwyqANEV02AGsD4HBbifQ==",
+      "createdAt": "2026-07-19T20:46:06.581Z",
+      "status": "pending"
     }
   ]
 }
