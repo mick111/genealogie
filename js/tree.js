@@ -7,7 +7,7 @@
 
 import { yearOf } from './gedcom.js';
 
-const BOX_W = 158, BOX_H = 48, H_GAP = 26, V_GAP = 58;
+const BOX_W = 108, BOX_H = 64, H_GAP = 22, V_GAP = 52;
 const UNIT = BOX_W + H_GAP, ROW = BOX_H + V_GAP, MARGIN = 16;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -270,9 +270,16 @@ function renderFan(container, data, rootId, onSelect, maxGen) {
 }
 
 function fanLabel(person, gen) {
-  // Nom sur 1-2 lignes + années (compact quand la génération est lointaine).
-  const name = person.name;
-  const parts = gen >= 4 ? [truncate(name, 16)] : splitName(name);
+  const given = person.given || person.name || '';
+  const surname = person.marriedSurname || person.surname || '';
+  const birth = person.marriedSurname && person.surname ? person.surname : '';
+  const parts = gen >= 4
+    ? [truncate(given, 12)]
+    : birth
+      ? [truncate(given, 12), truncate(surname, 12), truncate(`née ${birth}`, 14)]
+      : surname
+        ? [truncate(given, 12), truncate(surname, 12)]
+        : splitName(person.name);
   const b = person.birth ? yearOf(person.birth.date) : '';
   const d = person.death ? yearOf(person.death.date) : '';
   if (b || d) parts.push(`${b || '?'}–${d || (person.death ? '?' : '')}`.replace(/–$/, ''));
@@ -297,9 +304,15 @@ function nodeBox(person, x, y, isFocus, onSelect) {
   const sexCls = person.sex === 'F' ? 'sex-f' : person.sex === 'M' ? 'sex-m' : 'sex-u';
   const g = el('g', { class: 'tree-node' + (isFocus ? ' is-root' : ''), transform: `translate(${x}, ${y})`, tabindex: '0', role: 'button' });
   g.appendChild(el('rect', { class: `tree-box ${sexCls}`, width: BOX_W, height: BOX_H, rx: 8 }));
-  g.appendChild(el('text', { class: 'tree-name', x: 10, y: 20 }, truncate(person.name, 20)));
+  const given = (person.given || person.name || '').trim();
+  const surname = (person.marriedSurname || person.surname || '').trim();
+  const birthName = person.marriedSurname && person.surname ? person.surname : '';
+  if (given) g.appendChild(el('text', { class: 'tree-given', x: 8, y: 16 }, truncate(given, 13)));
+  if (surname) g.appendChild(el('text', { class: 'tree-surname', x: 8, y: 30 }, truncate(surname, 13)));
+  else if (!given) g.appendChild(el('text', { class: 'tree-given', x: 8, y: 24 }, truncate(person.name, 13)));
   const sub = lifespan(person);
-  if (sub) g.appendChild(el('text', { class: 'tree-dates', x: 10, y: 37 }, sub));
+  if (sub) g.appendChild(el('text', { class: 'tree-dates', x: 8, y: 50 }, sub));
+  else if (birthName) g.appendChild(el('text', { class: 'tree-dates', x: 8, y: 50 }, `née ${truncate(birthName, 11)}`));
   g.addEventListener('click', onSelect);
   g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } });
   return g;

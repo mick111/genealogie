@@ -24,3 +24,7 @@ token
 token_publish
 token_register
 passwd
+
+# Sources GEDCOM locales (données réelles)
+imports/
+merged.ged

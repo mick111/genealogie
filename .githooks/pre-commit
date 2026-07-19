@@ -1,9 +1,37 @@
 #!/bin/sh
 # Met à jour version.json avant chaque commit (hash git court du HEAD courant).
+# Bloque aussi les fichiers sensibles (secrets, GEDCOM réels).
 set -e
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+
+blocked=0
+for f in $(git diff --cached --name-only --diff-filter=ACM); do
+  case "$f" in
+    passwd|token|token_publish|token_register)
+      echo "pre-commit: refus — secret interdit : $f"
+      blocked=1
+      ;;
+    imports/*|merged.ged)
+      echo "pre-commit: refus — GEDCOM local / fusion : $f"
+      blocked=1
+      ;;
+    *.ged)
+      case "$f" in
+        sample/famille.ged) ;;
+        *)
+          echo "pre-commit: refus — GEDCOM en clair : $f (seul sample/famille.ged est autorisé)"
+          blocked=1
+          ;;
+      esac
+      ;;
+  esac
+done
+if [ "$blocked" -ne 0 ]; then
+  echo "pre-commit: annulé. Vérifiez .gitignore et git reset HEAD <fichier> si besoin."
+  exit 1
+fi
 
 node tools/write-version.mjs
 

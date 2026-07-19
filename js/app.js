@@ -1,7 +1,7 @@
 // app.js — application principale : login chiffré, routing, fiches, recherche.
 
 import { decryptTextContainer, decryptBytesWithKey, encryptText } from './crypto.js';
-import { parseGedcom, serializeGedcom, formatDate, yearOf, parseGedcomDateParts, mergeDatePartsFormValue } from './gedcom.js';
+import { parseGedcom, serializeGedcom, formatDate, yearOf, parseGedcomDateParts, mergeDatePartsFormValue, buildPersonName } from './gedcom.js';
 import { renderTree } from './tree.js';
 import {
   detectGithubRepo, loadGithubMeta, hasGithubToken, saveGithubSettings,
@@ -254,11 +254,12 @@ function nextId(prefix, map) {
   for (const key of map.keys()) { const m = re.exec(key); if (m) max = Math.max(max, +m[1]); }
   return '@' + prefix + (max + 1) + '@';
 }
-function makePerson({ given, surname, sex, birthDate, birthPlace, deathDate, deathPlace }) {
+function makePerson({ given, surname, marriedSurname, sex, birthDate, birthPlace, deathDate, deathPlace }) {
   const id = nextId('I', state.individuals);
+  const ms = marriedSurname || '';
   const p = {
-    id, given: given || '', surname: surname || '', sex: sex || '',
-    name: [given, surname].filter(Boolean).join(' ') || '(sans nom)',
+    id, given: given || '', surname: surname || '', marriedSurname: ms, sex: sex || '',
+    name: buildPersonName({ given, surname, marriedSurname: ms }),
     birth: (birthDate || birthPlace) ? { date: birthDate || '', place: birthPlace || '' } : null,
     death: (deathDate || deathPlace) ? { date: deathDate || '', place: deathPlace || '' } : null,
     famc: [], fams: [], media: [],
@@ -307,8 +308,10 @@ function addChild(personId, familyId, data) {
 }
 function editPerson(id, d) {
   const p = state.individuals.get(id);
-  p.given = d.given || ''; p.surname = d.surname || '';
-  p.name = [d.given, d.surname].filter(Boolean).join(' ') || '(sans nom)';
+  p.given = d.given || '';
+  p.surname = d.surname || '';
+  p.marriedSurname = d.marriedSurname || '';
+  p.name = buildPersonName(p);
   p.sex = d.sex || '';
   p.birth = (d.birthDate || d.birthPlace) ? { date: d.birthDate || '', place: d.birthPlace || '' } : null;
   p.death = (d.deathDate || d.deathPlace) ? { date: d.deathDate || '', place: d.deathPlace || '' } : null;
@@ -416,7 +419,8 @@ function openForm(title, initial, onSubmit, extraHtml = '') {
       <h3>${escapeHtml(title)}</h3>
       ${extraHtml}
       <label>Prénom(s)<input name="given" value="${escapeHtml(i.given || '')}" autofocus></label>
-      <label>Nom<input name="surname" value="${escapeHtml(i.surname || '')}"></label>
+      <label>Nom de naissance<input name="surname" value="${escapeHtml(i.surname || '')}"></label>
+      <label>Nom marital <span class="muted">(optionnel)</span><input name="marriedSurname" value="${escapeHtml(i.marriedSurname || '')}" placeholder="ex. Dupont"></label>
       <label>Sexe
         <select name="sex">
           <option value=""${!i.sex ? ' selected' : ''}>—</option>
@@ -659,50 +663,104 @@ function switchTree() {
   else renderTreePicker();
 }
 
+function topbarMenuItems({ allowPublish, allowExport, withSearch }) {
+  const items = [];
+  if (state.trees.length > 1) {
+    items.push('<button type="button" id="switch-tree" class="topbar-menu-item">Changer d\'arbre</button>');
+  }
+  if (authMode) items.push('<a href="#/account" class="topbar-menu-item">Mon compte</a>');
+  if (isAdmin()) items.push('<a href="#/admin" class="topbar-menu-item">Administration</a>');
+  if (allowPublish) {
+    items.push('<button type="button" id="publish" class="topbar-menu-item">Publier sur GitHub</button>');
+    items.push('<button type="button" id="github-settings" class="topbar-menu-item">Paramètres GitHub</button>');
+  }
+  if (allowExport) {
+    items.push('<button type="button" id="export" class="topbar-menu-item">Télécharger une copie</button>');
+  }
+  items.push('<button type="button" id="logout" class="topbar-menu-item topbar-menu-danger">Déconnexion</button>');
+  const menu = items.length
+    ? `<div class="topbar-menu-wrap">
+        <button type="button" id="topbar-menu-btn" class="topbar-menu-btn" aria-expanded="false" aria-controls="topbar-menu" aria-label="Menu">☰</button>
+        <nav id="topbar-menu" class="topbar-menu" hidden>${items.join('')}</nav>
+      </div>`
+    : '';
+  const search = withSearch
+    ? `<form id="search-form" class="search">
+        <input type="search" id="q" placeholder="Rechercher…" autocomplete="off" />
+      </form>`
+    : '';
+  return { search, menu };
+}
+
+function wireTopbar({ allowPublish, allowExport, withSearch }) {
+  const menuBtn = $('#topbar-menu-btn');
+  const menu = $('#topbar-menu');
+  const closeMenu = () => {
+    if (!menu || !menuBtn) return;
+    menu.hidden = true;
+    menuBtn.setAttribute('aria-expanded', 'false');
+  };
+  if (menuBtn && menu) {
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = menu.hidden;
+      menu.hidden = !open;
+      menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    if (window._topbarDocClick) document.removeEventListener('click', window._topbarDocClick);
+    window._topbarDocClick = (e) => {
+      if (menu.hidden) return;
+      if (e.target.closest('.topbar-menu-wrap')) return;
+      closeMenu();
+    };
+    document.addEventListener('click', window._topbarDocClick);
+  }
+  $('#logout')?.addEventListener('click', logout);
+  $('#switch-tree')?.addEventListener('click', switchTree);
+  $('#export')?.addEventListener('click', exportData);
+  if (allowPublish) {
+    $('#publish')?.addEventListener('click', publishData);
+    $('#github-settings')?.addEventListener('click', () => openGithubSettings());
+  }
+  if (withSearch) {
+    updateSyncStatus();
+    $('#search-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      location.hash = '#/search/' + encodeURIComponent($('#q').value.trim());
+    });
+  }
+}
+
 // ------------------------------------------------------------------ shell app
 function showApp() {
   if (needsPersonLink()) {
     $('#login').hidden = true;
     const app = $('#app');
     app.hidden = false;
-    app.innerHTML = `<header class="topbar"><a href="#/" class="brand">🌳 Généalogie</a>${
-      authMode ? ' <a href="#/account" class="link-btn">Mon compte</a>' : ''
-    }</header><main id="view"></main>`;
+    app.innerHTML = `<header class="topbar">
+      <a href="#/" class="brand">🌳 Généalogie</a>
+      <span class="topbar-spacer"></span>
+      ${authMode ? '<a href="#/account" class="link-btn">Mon compte</a>' : ''}
+    </header><main id="view"></main>`;
     renderPersonLink($('#view'), escapeHtml, state, persist);
     return;
   }
   const allowPublish = !authMode || canPublish();
   const allowExport = allowPublish || hasLocalEdits();
+  const treeName = escapeHtml(currentTreeMeta()?.name || 'Généalogie');
+  const { search, menu } = topbarMenuItems({ allowPublish, allowExport, withSearch: true });
   $('#login').hidden = true;
   const app = $('#app');
   app.hidden = false;
   app.innerHTML = `
     <header class="topbar">
-      <a href="#/" class="brand">🌳 ${escapeHtml(currentTreeMeta()?.name || 'Généalogie')}</a>
-      <form id="search-form" class="search">
-        <input type="search" id="q" placeholder="Rechercher une personne…" autocomplete="off" />
-      </form>
+      <a href="#/" class="brand" title="${treeName}">🌳 <span class="brand-text">${treeName}</span></a>
+      ${search}
       <span id="sync-status" class="sync-badge"></span>
-      ${state.trees.length > 1 ? '<button id="switch-tree" class="link-btn" title="Changer d\'arbre">Arbres</button>' : ''}
-      ${authMode ? '<a href="#/account" class="link-btn">Mon compte</a>' : ''}
-      ${isAdmin() ? '<a href="#/admin" class="link-btn">Admin</a>' : ''}
-      ${allowPublish ? '<button id="publish" class="link-btn" title="Publier sur GitHub">Publier</button>' : ''}
-      ${allowPublish ? '<button id="github-settings" class="link-btn" title="Configurer GitHub">⚙ GitHub</button>' : ''}
-      ${allowExport ? '<button id="export" class="link-btn" title="Télécharger secours">⬇︎</button>' : ''}
-      <button id="logout" class="link-btn">Déconnexion</button>
+      ${menu}
     </header>
     <main id="view"></main>`;
-  $('#logout').addEventListener('click', logout);
-  const switchBtn = $('#switch-tree');
-  if (switchBtn) switchBtn.addEventListener('click', switchTree);
-  if ($('#export')) $('#export').addEventListener('click', exportData);
-  if ($('#publish')) $('#publish').addEventListener('click', publishData);
-  if ($('#github-settings')) $('#github-settings').addEventListener('click', () => openGithubSettings());
-  updateSyncStatus();
-  $('#search-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    location.hash = '#/search/' + encodeURIComponent($('#q').value.trim());
-  });
+  wireTopbar({ allowPublish, allowExport, withSearch: true });
   route();
 }
 
@@ -747,7 +805,10 @@ function personListItem(indi) {
 function renderSearch(view, query) {
   const q = normalize(query);
   const results = q
-    ? [...state.individuals.values()].filter((i) => normalize(i.name).includes(q))
+    ? [...state.individuals.values()].filter((i) =>
+      normalize(i.name).includes(q)
+      || normalize(i.surname).includes(q)
+      || normalize(i.marriedSurname).includes(q))
     : [];
   const qInput = $('#q');
   if (qInput) qInput.value = query;
@@ -852,7 +913,7 @@ function renderPerson(view, id) {
   // Actions d'édition
   const act = (sel, fn) => { const b = view.querySelector(`[data-act="${sel}"]`); if (b) b.addEventListener('click', fn); };
   act('edit', () => openForm('Modifier ' + p.name, {
-    given: p.given, surname: p.surname, sex: p.sex,
+    given: p.given, surname: p.surname, marriedSurname: p.marriedSurname || '', sex: p.sex,
     birthDate: p.birth?.date, birthPlace: p.birth?.place,
     deathDate: p.death?.date, deathPlace: p.death?.place,
   }, (d) => applyEdit(() => { editPerson(id, d); return id; }, id)));

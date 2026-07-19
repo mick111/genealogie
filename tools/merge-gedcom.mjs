@@ -6,7 +6,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { decryptTextContainer } from '../js/crypto.js';
-import { parseGedcom, serializeGedcom, yearOf } from '../js/gedcom.js';
+import { parseGedcom, serializeGedcom, yearOf, buildPersonName } from '../js/gedcom.js';
 import { loadPassword } from './passwd.mjs';
 
 const SEEDS = {
@@ -101,7 +101,8 @@ function mergePerson(base, incoming) {
     base.given = incoming.given;
   }
   if (incoming.surname && !base.surname) base.surname = incoming.surname;
-  base.name = [base.given, base.surname].filter(Boolean).join(' ') || base.name;
+  if (incoming.marriedSurname && !base.marriedSurname) base.marriedSurname = incoming.marriedSurname;
+  base.name = buildPersonName(base);
   base.birth = mergeEvent(base.birth, incoming.birth);
   base.death = mergeEvent(base.death, incoming.death);
   if (!base.sex && incoming.sex) base.sex = incoming.sex;
@@ -212,39 +213,42 @@ function applyFamily(famData, individuals, families) {
 function parseArgs(argv) {
   let treeId = 'principal';
   let importPath = null;
-  let outPath = 'merged.ged';
+  let basePath = null;
+  let outPath = 'imports/merged.ged';
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--tree' && argv[i + 1]) { treeId = argv[++i]; continue; }
     if (argv[i] === '--import' && argv[i + 1]) { importPath = argv[++i]; continue; }
+    if (argv[i] === '--base' && argv[i + 1]) { basePath = argv[++i]; continue; }
     if (argv[i] === '--out' && argv[i + 1]) { outPath = argv[++i]; continue; }
   }
-  return { treeId, importPath, outPath };
+  return { treeId, importPath, basePath, outPath };
 }
 
-async function loadBaseGedcom(treeId, password) {
+async function loadBaseGedcom(treeId, password, basePath) {
+  if (basePath) return readFileSync(basePath, 'utf8');
   const encPath = `trees/${treeId}/tree.enc`;
   const container = JSON.parse(readFileSync(encPath, 'utf8'));
   if (container.v === 2 && container.type === 'tree') {
-    throw new Error('Arbre v2 MK : exportez d’abord en GEDCOM ou utilisez --base fichier.ged');
+    throw new Error('Arbre v2 MK : utilisez --base imports/….ged (GEDCOM en clair)');
   }
   const { text } = await decryptTextContainer(container, password);
   return text;
 }
 
 async function main() {
-  const { treeId, importPath, outPath } = parseArgs(process.argv.slice(2));
+  const { treeId, importPath, basePath, outPath } = parseArgs(process.argv.slice(2));
   if (!importPath) {
-    console.error('Usage : node tools/merge-gedcom.mjs --tree principal --import fichier.ged [--out merged.ged]');
+    console.error('Usage : node tools/merge-gedcom.mjs --import fichier.ged [--base base.ged] [--out imports/merged.ged] [--tree principal]');
     process.exit(1);
   }
 
   const password = loadPassword();
-  if (!password) {
-    console.error('Mot de passe requis (passwd ou GEN_PASSWORD).');
+  if (!basePath && !password) {
+    console.error('Mot de passe requis (passwd ou GEN_PASSWORD), ou indiquez --base fichier.ged');
     process.exit(1);
   }
 
-  const baseText = await loadBaseGedcom(treeId, password);
+  const baseText = await loadBaseGedcom(treeId, password, basePath);
   const base = parseGedcom(baseText);
   const incoming = parseGedcom(readFileSync(importPath, 'utf8'));
 

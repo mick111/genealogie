@@ -65,6 +65,93 @@ function parseName(value) {
   return { full: value.trim(), given: value.trim(), surname: '' };
 }
 
+function nameType(node) {
+  const t = child(node, 'TYPE');
+  return t ? t.value.trim().toLowerCase().replace(/\s+/g, ' ') : '';
+}
+
+function isMarriedType(type) {
+  return type === 'married' || type === 'marriage' || type === 'married name';
+}
+
+function isBirthType(type) {
+  return type === 'birth' || type === 'maiden';
+}
+
+function parseMarnmValue(value) {
+  const parsed = parseName(value);
+  return (parsed.surname || parsed.full || value || '').trim();
+}
+
+// Extrait prénom, nom de naissance et nom marital d'un enregistrement INDI.
+function parseNameNode(nn) {
+  const fromValue = parseName(nn.value);
+  const givn = child(nn, 'GIVN');
+  const surn = child(nn, 'SURN');
+  const marnm = child(nn, '_MARNM');
+  return {
+    given: givn ? givn.value.trim() : fromValue.given,
+    surname: surn ? surn.value.trim() : fromValue.surname,
+    marriedFromMarnm: marnm ? parseMarnmValue(marnm.value) : '',
+  };
+}
+
+function parseNamesFromIndi(rec) {
+  let given = '', surname = '', marriedSurname = '';
+
+  for (const m of children(rec, '_MARNM')) {
+    marriedSurname = marriedSurname || parseMarnmValue(m.value);
+  }
+
+  for (const nn of children(rec, 'NAME')) {
+    const type = nameType(nn);
+    const parsed = parseNameNode(nn);
+
+    if (parsed.marriedFromMarnm) {
+      marriedSurname = marriedSurname || parsed.marriedFromMarnm;
+      if (parsed.surname) surname = surname || parsed.surname;
+      if (parsed.given) given = given || parsed.given;
+      continue;
+    }
+    if (isMarriedType(type)) {
+      marriedSurname = marriedSurname || parsed.surname || parsed.given;
+      if (parsed.given) given = given || parsed.given;
+      continue;
+    }
+    if (isBirthType(type)) {
+      if (parsed.surname) surname = parsed.surname;
+      if (parsed.given) given = given || parsed.given;
+      continue;
+    }
+    if (!given && !surname) {
+      given = parsed.given;
+      surname = parsed.surname;
+    } else if (parsed.surname && parsed.surname !== surname && !marriedSurname) {
+      marriedSurname = parsed.surname;
+      if (parsed.given) given = given || parsed.given;
+    } else {
+      if (!given) given = parsed.given;
+      if (!surname) surname = parsed.surname;
+    }
+  }
+
+  if (marriedSurname && marriedSurname === surname) marriedSurname = '';
+  return { given, surname, marriedSurname };
+}
+
+// Nom d'affichage : « Prénom NomMarital (née NomNaissance) » si les deux noms existent.
+export function buildPersonName({ given = '', surname = '', marriedSurname = '' } = {}) {
+  const g = String(given || '').trim();
+  const s = String(surname || '').trim();
+  const m = String(marriedSurname || '').trim();
+  if (!g && !s && !m) return '(sans nom)';
+  if (m && m !== s) {
+    if (s) return [g, m, `(née ${s})`].filter(Boolean).join(' ');
+    return [g, m].filter(Boolean).join(' ');
+  }
+  return [g, s].filter(Boolean).join(' ');
+}
+
 // Extrait un événement (BIRT/DEAT/MARR...) -> { date, place }
 function parseEvent(node) {
   if (!node) return null;
@@ -130,14 +217,14 @@ export function parseGedcom(text) {
 
   for (const rec of root.children) {
     if (rec.tag === 'INDI' && rec.xref) {
-      const nameNode = child(rec, 'NAME');
-      const name = parseName(nameNode ? nameNode.value : '');
+      const names = parseNamesFromIndi(rec);
       const sex = child(rec, 'SEX');
       individuals.set(rec.xref, {
         id: rec.xref,
-        name: name.full || '(sans nom)',
-        given: name.given,
-        surname: name.surname,
+        name: buildPersonName(names),
+        given: names.given,
+        surname: names.surname,
+        marriedSurname: names.marriedSurname,
         sex: sex ? sex.value.trim().toUpperCase() : '',
         birth: parseBestEvent(children(rec, 'BIRT')),
         death: parseBestEvent(children(rec, 'DEAT')),
@@ -272,7 +359,17 @@ export function serializeGedcom(individuals, families) {
   };
   for (const p of individuals.values()) {
     L.push(`0 ${p.id} INDI`);
-    L.push(`1 NAME ${p.given || ''} /${p.surname || ''}/`);
+    const married = String(p.marriedSurname || '').trim();
+    if (married && p.surname) {
+      L.push(`1 NAME ${p.given || ''} /${p.surname}/`);
+      L.push('2 TYPE birth');
+    } else {
+      L.push(`1 NAME ${p.given || ''} /${p.surname || ''}/`);
+    }
+    if (married) {
+      L.push(`1 NAME ${p.given || ''} /${married}/`);
+      L.push('2 TYPE married');
+    }
     if (p.sex) L.push('1 SEX ' + p.sex);
     ev('BIRT', p.birth);
     ev('DEAT', p.death);
