@@ -1,4 +1,23 @@
 {
   "v": 1,
-  "pending": []
+  "pending": [
+    {
+      "id": "fd034713-20f6-4090-afbb-10048b1228b6",
+      "displayName": "Sandrine MARESCQ",
+      "credentialId": "o6GL82mMC1RwB3S1fi1a1KmbfCg=",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+OP73J5W8rwPMH8QlYuuFYTz7BAfiG81T58e1cev1cJmNmN/ctNl3qHJLH1VvvCoXVMk+G/SU3eNLLZsPeslPw==",
+      "setupPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAESKvikDizWq7OGcErEAalFZl7MnNGRajkNzzvZKKwNvEu2n/gtoBIrwyIyzM52Lhfgip9WIUNW2mFvkj4FcyeXw==",
+      "createdAt": "2026-07-19T20:37:05.310Z",
+      "status": "pending"
+    },
+    {
+      "id": "2e3b8e05-97cc-4f89-b8a8-12dabaaaebbf",
+      "displayName": "Jean-Michel",
+      "credentialId": "wPXW2YJpEAVzO8jnZcXUuA==",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyU4uxJzlM8HeD2vb4SBc91RIuwgBC7Qk+/LuZl4vmfL+oTdaG7Z48QE8Ln/p1hRIN+Z1YnGlErK9nqXZYIwjoA==",
+      "setupPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEncZUF8HKWi5xj3B9WQ2I7kDsuDfHjiX2kNX389teBbFOBdR1cdgMjKyODMWAJOLhj4xv9QKas/aDt786Wxatzg==",
+      "createdAt": "2026-07-19T20:38:01.631Z",
+      "status": "pending"
+    }
+  ]
 }
