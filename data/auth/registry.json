@@ -31,7 +31,7 @@
       "role": "editor",
       "status": "approved",
       "personId": null,
-      "setupRequired": true,
+      "setupRequired": false,
       "setupWrap": {
         "v": 1,
         "ephPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPTV63DTxe6V8/b1C9UZc6fZgOtsh8hO9X6EOwjKr5P7OmqdtnMesa9UzJXHiCpzNC6xDAh/42tHCbbinWstlTA==",
@@ -43,8 +43,8 @@
       "pinWrap": {
         "v": 1,
         "cipher": "AES-GCM",
-        "iv": "e/GpvEDfg7bo8rb+",
-        "ct": "33LEKGK0wUL8hpgP5fXRlRj0zli2uCEe6FCuA1boBukLnp0+3DXkIyOEmKbyNS2t"
+        "iv": "oHMbJqnNj3xw+TkE",
+        "ct": "6KZJwDeLHHdCVCRNzhLnntdWufAe0IGQypMYdVpCMyJa8kNNEfFKVDIj8cIzVrH9"
       },
       "prfWrap": {
         "v": 1,
