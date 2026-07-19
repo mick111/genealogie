@@ -140,13 +140,15 @@ function parseNamesFromIndi(rec) {
 }
 
 // Nom d'affichage : « Prénom NomMarital (née NomNaissance) » si les deux noms existent.
-export function buildPersonName({ given = '', surname = '', marriedSurname = '' } = {}) {
+// Le « né/née/né·e » s'accorde selon le sexe.
+export function buildPersonName({ given = '', surname = '', marriedSurname = '', sex = '' } = {}) {
   const g = String(given || '').trim();
   const s = String(surname || '').trim();
   const m = String(marriedSurname || '').trim();
   if (!g && !s && !m) return '(sans nom)';
   if (m && m !== s) {
-    if (s) return [g, m, `(née ${s})`].filter(Boolean).join(' ');
+    const born = sex === 'M' ? 'né' : sex === 'F' ? 'née' : 'né·e';
+    if (s) return [g, m, `(${born} ${s})`].filter(Boolean).join(' ');
     return [g, m].filter(Boolean).join(' ');
   }
   return [g, s].filter(Boolean).join(' ');
@@ -219,13 +221,14 @@ export function parseGedcom(text) {
     if (rec.tag === 'INDI' && rec.xref) {
       const names = parseNamesFromIndi(rec);
       const sex = child(rec, 'SEX');
+      const sexVal = sex ? sex.value.trim().toUpperCase() : '';
       individuals.set(rec.xref, {
         id: rec.xref,
-        name: buildPersonName(names),
+        name: buildPersonName({ ...names, sex: sexVal }),
         given: names.given,
         surname: names.surname,
         marriedSurname: names.marriedSurname,
-        sex: sex ? sex.value.trim().toUpperCase() : '',
+        sex: sexVal,
         birth: parseBestEvent(children(rec, 'BIRT')),
         death: parseBestEvent(children(rec, 'DEAT')),
         famc: children(rec, 'FAMC').map((c) => c.value.trim()), // familles où enfant

@@ -55,6 +55,40 @@ function mediaEncUrl(file) {
   return treeMediaDir(TREE_ID) + base + '.enc';
 }
 
+// Une photo est soit intégrée (data URI, ajoutée dans l'app), soit un fichier
+// chiffré externe (data/media/*.enc, issu du build initial).
+function isInlineMedia(m) { return typeof m?.file === 'string' && m.file.startsWith('data:'); }
+
+function mediaImgTag(m, cls) {
+  const c = cls ? ` class="${cls}"` : '';
+  return isInlineMedia(m)
+    ? `<img${c} src="${escapeHtml(m.file)}" alt="">`
+    : `<img${c} data-enc="${escapeHtml(mediaEncUrl(m.file))}" alt="">`;
+}
+
+// Redimensionne une image (fichier) en data URI JPEG compact, pour l'intégrer
+// dans le GEDCOM sans faire exploser la taille du fichier chiffré.
+function fileToDownscaledDataUrl(file, maxDim = 900, quality = 0.78) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('decode'));
+      img.onload = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function migrateLegacyStorage(treeId) {
   const legacy = localStorage.getItem('gen_data_v1');
   const key = storageKey(treeId);
@@ -124,8 +158,7 @@ async function publishData() {
     openGithubSettings(() => publishData());
     return;
   }
-  const path = defaultGithubPath(TREE_ID);
-  if (!confirm(`Publier l'arbre sur GitHub ?\n\n${saved.owner}/${saved.repo} → ${path} (${saved.branch || 'main'})`)) return;
+  if (!confirm('Publier les modifications en ligne ?\n\nElles deviendront visibles pour les autres après quelques instants.')) return;
 
   const btn = $('#publish');
   const prev = btn?.textContent;
@@ -135,7 +168,7 @@ async function publishData() {
     await publishTree(state.key, state.container, (s) => { if (btn) btn.textContent = s; }, TREE_ID);
     localStorage.removeItem(storageKey(TREE_ID));
     updateSyncStatus();
-    alert('Arbre publié sur GitHub.\n\nLe site en ligne sera à jour dans quelques instants.');
+    alert('Modifications publiées en ligne.\n\nLe site sera à jour dans quelques instants.');
   } catch (err) {
     alert('Publication impossible :\n' + githubErrorMessage(err));
   } finally {
@@ -156,9 +189,9 @@ function openGithubSettings(onSaved) {
   wrap.className = 'modal-overlay';
   wrap.innerHTML = `
     <form class="modal-card">
-      <h3>Publication GitHub</h3>
-      <p class="muted modal-hint">Le token est chiffré (AES-256) avec la clé de ton mot de passe et stocké localement.
-      Il ne quitte ton navigateur que pour appeler l'API GitHub lors d'une publication.</p>
+      <h3>Réglages de publication</h3>
+      <p class="muted modal-hint">Réglages techniques (à faire une seule fois). La clé d'accès est chiffrée
+      (AES-256) avec ta clé de mot de passe et stockée localement ; elle ne quitte ton navigateur que pour publier.</p>
       <label>Propriétaire<input name="owner" value="${escapeHtml(meta.owner || '')}" placeholder="ex. mick111" required></label>
       <label>Dépôt<input name="repo" value="${escapeHtml(meta.repo || '')}" placeholder="ex. genealogie" required></label>
       <label>Branche<input name="branch" value="${escapeHtml(meta.branch || 'main')}"></label>
@@ -252,7 +285,7 @@ function makePerson({ given, surname, marriedSurname, sex, birthDate, birthPlace
   const ms = marriedSurname || '';
   const p = {
     id, given: given || '', surname: surname || '', marriedSurname: ms, sex: sex || '',
-    name: buildPersonName({ given, surname, marriedSurname: ms }),
+    name: buildPersonName({ given, surname, marriedSurname: ms, sex }),
     birth: (birthDate || birthPlace) ? { date: birthDate || '', place: birthPlace || '' } : null,
     death: (deathDate || deathPlace) ? { date: deathDate || '', place: deathPlace || '' } : null,
     famc: [], fams: [], media: [],
@@ -304,8 +337,8 @@ function editPerson(id, d) {
   p.given = d.given || '';
   p.surname = d.surname || '';
   p.marriedSurname = d.marriedSurname || '';
-  p.name = buildPersonName(p);
   p.sex = d.sex || '';
+  p.name = buildPersonName(p);
   p.birth = (d.birthDate || d.birthPlace) ? { date: d.birthDate || '', place: d.birthPlace || '' } : null;
   p.death = (d.deathDate || d.deathPlace) ? { date: d.deathDate || '', place: d.deathPlace || '' } : null;
 }
@@ -339,6 +372,23 @@ function deletePerson(id) {
       state.families.delete(fid);
       removeFamilyRefs(fid);
     }
+  }
+}
+// ---- photos ----------------------------------------------------------------
+function addPhoto(id, dataUrl) {
+  const p = state.individuals.get(id);
+  if (!p) return;
+  (p.media ||= []).push({ file: dataUrl, title: '' });
+}
+function removePhoto(id, index) {
+  const p = state.individuals.get(id);
+  if (p?.media) p.media.splice(index, 1);
+}
+function setPortrait(id, index) {
+  const p = state.individuals.get(id);
+  if (p?.media && index > 0 && index < p.media.length) {
+    const [m] = p.media.splice(index, 1);
+    p.media.unshift(m);
   }
 }
 
@@ -587,8 +637,8 @@ function topbarMenuItems({ allowPublish, allowExport, withSearch }) {
   if (authMode) items.push('<a href="#/account" class="topbar-menu-item">Mon compte</a>');
   if (isAdmin()) items.push('<a href="#/admin" class="topbar-menu-item">Administration</a>');
   if (allowPublish) {
-    items.push('<button type="button" id="publish" class="topbar-menu-item">Publier sur GitHub</button>');
-    items.push('<button type="button" id="github-settings" class="topbar-menu-item">Paramètres GitHub</button>');
+    items.push('<button type="button" id="publish" class="topbar-menu-item">Publier les modifications</button>');
+    items.push('<button type="button" id="github-settings" class="topbar-menu-item">Réglages de publication</button>');
   }
   if (allowExport) {
     items.push('<button type="button" id="export" class="topbar-menu-item">Télécharger une copie</button>');
@@ -786,9 +836,12 @@ function renderPerson(view, id) {
   }).join('');
 
   const icon = p.sex === 'F' ? '👩' : p.sex === 'M' ? '👨' : '👤';
-  const photo = p.media.length
-    ? `<img class="portrait" data-enc="${escapeHtml(mediaEncUrl(p.media[0].file))}"
-         data-placeholder="portrait placeholder" data-icon="${icon}" alt="${escapeHtml(p.name)}" />`
+  const first = p.media[0];
+  const photo = first
+    ? (isInlineMedia(first)
+      ? `<img class="portrait" src="${escapeHtml(first.file)}" alt="${escapeHtml(p.name)}" />`
+      : `<img class="portrait" data-enc="${escapeHtml(mediaEncUrl(first.file))}"
+           data-placeholder="portrait placeholder" data-icon="${icon}" alt="${escapeHtml(p.name)}" />`)
     : `<div class="portrait placeholder">${icon}</div>`;
 
   const canEdit = !authMode || canEditPerson(id);
@@ -818,9 +871,15 @@ function renderPerson(view, id) {
         <button class="add-btn" data-act="add-spouse">+ Conjoint·e</button>
         <button class="add-btn" data-act="add-child">+ Enfant</button>
       </div>` : ''}
-      ${p.media.length > 1 ? `<div class="rel-block"><h4>Photos</h4><div class="gallery">${
-        p.media.map((m) => `<img data-enc="${escapeHtml(mediaEncUrl(m.file))}" alt=""/>`).join('')
-      }</div></div>` : ''}
+      ${(p.media.length || canEdit) ? `<div class="rel-block">
+        <h4>Photos ${canEdit ? '<button class="add-btn" data-act="add-photo">+ ajouter</button>' : ''}</h4>
+        <div class="gallery">${
+          p.media.map((m, idx) => `<figure class="photo">${mediaImgTag(m)}${canEdit ? `<span class="photo-tools">${
+            idx > 0 ? `<button class="photo-btn" data-photo-portrait="${idx}" title="Définir comme portrait">★</button>` : ''
+          }<button class="photo-btn" data-photo-del="${idx}" title="Supprimer">×</button></span>` : ''}</figure>`).join('')
+          || '<span class="muted">Aucune photo.</span>'
+        }</div>
+      </div>` : ''}
     </section>`;
 
   hydrateImages(view);
@@ -866,6 +925,28 @@ function renderPerson(view, id) {
       return addChild(id, famId, d);
     }, id), extra);
   });
+
+  // Photos
+  act('add-photo', () => {
+    const input = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*' });
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        const dataUrl = await fileToDownscaledDataUrl(file);
+        await applyEdit(() => { addPhoto(id, dataUrl); return id; }, id);
+      } catch (_) {
+        alert('Image illisible ou format non supporté.');
+      }
+    });
+    input.click();
+  });
+  view.querySelectorAll('[data-photo-del]').forEach((b) => b.addEventListener('click', () => {
+    if (!confirm('Supprimer cette photo ?')) return;
+    applyEdit(() => { removePhoto(id, Number(b.dataset.photoDel)); return id; }, id);
+  }));
+  view.querySelectorAll('[data-photo-portrait]').forEach((b) => b.addEventListener('click', () =>
+    applyEdit(() => { setPortrait(id, Number(b.dataset.photoPortrait)); return id; }, id)));
 }
 
 function stepper(kind, label, min, max) {

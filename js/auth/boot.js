@@ -313,7 +313,7 @@ export function renderAuthGate(escapeHtml, onUnlocked) {
         const setupKeys = await createSetupKeyPair();
         const reg = await registerPasskey(displayName);
         storeSetupPrivateKey(reg.userId, setupKeys.privateKeyB64);
-        status.textContent = 'Envoi de la demande sur GitHub…';
+        status.textContent = 'Envoi de la demande…';
         await appendPending({
           id: reg.userId,
           displayName: reg.displayName,
@@ -501,7 +501,7 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
       <h2>Validation des comptes</h2>
       <p class="muted">Rôles : <strong>Lecture seule</strong> — consulter l'arbre ;
       <strong>Sa fiche uniquement</strong> — modifier sa propre personne (après lien dans l'arbre) ;
-      <strong>Éditeur</strong> — modifier tout l'arbre et publier sur GitHub.</p>
+      <strong>Éditeur</strong> — modifier tout l'arbre et publier les modifications en ligne.</p>
       <p class="muted">Après approbation, la personne finalise son PIN secours sur son appareil (sans que vous le connaissiez).</p>
       <p class="muted">${pending.length} demande(s) en attente.</p>
       ${pending.length ? pending.map((p) => `
