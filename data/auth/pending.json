@@ -1,14 +1,4 @@
 {
   "v": 1,
-  "pending": [
-    {
-      "id": "fd034713-20f6-4090-afbb-10048b1228b6",
-      "displayName": "Sandrine MARESCQ",
-      "credentialId": "o6GL82mMC1RwB3S1fi1a1KmbfCg=",
-      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+OP73J5W8rwPMH8QlYuuFYTz7BAfiG81T58e1cev1cJmNmN/ctNl3qHJLH1VvvCoXVMk+G/SU3eNLLZsPeslPw==",
-      "setupPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAESKvikDizWq7OGcErEAalFZl7MnNGRajkNzzvZKKwNvEu2n/gtoBIrwyIyzM52Lhfgip9WIUNW2mFvkj4FcyeXw==",
-      "createdAt": "2026-07-19T20:37:05.310Z",
-      "status": "pending"
-    }
-  ]
+  "pending": []
 }
