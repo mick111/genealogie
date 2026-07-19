@@ -44,6 +44,24 @@
         "iv": "l3Czq6v+99yPKjXn",
         "ct": "8O/cNc48ripWYkp13dv1/4b6yzxXOHr5ACxBWBXGbCYDaIUJ6u6LflZb9BogOzCc"
       }
+    },
+    {
+      "id": "094990b9-3b55-433c-8d93-52fd19dbcd3c",
+      "displayName": "Michael",
+      "credentialId": "LfEmyEX3+uEJ1R/uha56amymZ/rHyA==",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQMAUj+i6lViYkPFuSLb0itnwW4rKY+2TeKuHakGskGhg0vCkNqw578IZITPWrlW+BoDy/AVMTBCDYei3D0QopQ==",
+      "role": "editor",
+      "status": "approved",
+      "personId": null,
+      "setupRequired": true,
+      "setupWrap": {
+        "v": 1,
+        "ephPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEeiBs/a6JNmD5S5nIBOnyfVWEWWeHAvJKZLX/G7R+DpszPPce06jgyHPGuq75DnN1Fdv9JZ6RWXSJY5A8WhmVYQ==",
+        "cipher": "AES-GCM",
+        "iv": "CttPX3QLQekyXKwI",
+        "ct": "NifPZ6VCSjFEBSXeTpxebmVS6k6WId8pnNlnDzXGbz9UXYjqDrmXkz6fDqTOG+VO"
+      },
+      "createdAt": "2026-07-19T17:38:46.142Z"
     }
   ]
 }
