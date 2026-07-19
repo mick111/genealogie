@@ -1,7 +1,10 @@
 // Verrou d'édition exclusif (fichier public data/auth/edit-lock.json sur GitHub).
 
 import { loadSiteConfig, authPaths } from './site.js';
-import { loadGithubMeta, publishFile, fetchTextFile } from '../github.js';
+import {
+  loadGithubMeta, publishFile, fetchTextFile, loadBundledGithubConfig,
+  getGithubTokenForPublish, fetchRepoFileText,
+} from '../github.js';
 import { loadRegistry, saveRegistry } from './registry.js';
 
 export const LOCK_TTL_MS = 2 * 60 * 60 * 1000;
@@ -17,20 +20,30 @@ export function isLockActive(lock) {
   return new Date(lock.expiresAt) > new Date();
 }
 
-export async function loadEditLock() {
+// Lecture via l'API GitHub (fraîche) ; repli sur le fichier statique du site.
+export async function loadEditLock(key = null) {
   try {
     const site = await loadSiteConfig();
-    const { editLock } = authPaths(site);
-    const lock = JSON.parse(await fetchTextFile(editLock));
+    const { editLock: path } = authPaths(site);
+    let text = null;
+    try {
+      await loadBundledGithubConfig();
+      const token = await getGithubTokenForPublish(key);
+      text = await fetchRepoFileText(path, token);
+    } catch (_) { /* token ou API indisponible */ }
+    if (text == null) {
+      text = await fetchTextFile(`${path}?_=${Date.now()}`);
+    }
+    const lock = JSON.parse(text);
     return isLockActive(lock) ? lock : emptyLock();
   } catch (_) {
     return emptyLock();
   }
 }
 
-async function publishToken() {
-  const { getGithubTokenFromMk } = await import('../github.js');
-  return getGithubTokenFromMk();
+async function publishToken(key) {
+  await loadBundledGithubConfig();
+  return getGithubTokenForPublish(key);
 }
 
 async function writeEditLock(lock, key) {
@@ -38,7 +51,7 @@ async function writeEditLock(lock, key) {
   const { editLock: path } = authPaths(site);
   const meta = loadGithubMeta();
   if (!meta?.owner) throw new Error('GITHUB_META');
-  const token = await publishToken();
+  const token = await publishToken(key);
   await publishFile(
     meta.owner, meta.repo, path, meta.branch || 'main', token,
     JSON.stringify({ ...emptyLock(), ...lock }, null, 2) + '\n',
@@ -48,7 +61,10 @@ async function writeEditLock(lock, key) {
 }
 
 export async function acquireEditLock(user, key) {
-  const current = await loadEditLock();
+  const current = await loadEditLock(key);
+  if (isLockActive(current) && current.userId === user.id) {
+    return current;
+  }
   if (isLockActive(current) && current.userId !== user.id) {
     const err = new Error('LOCK_HELD');
     err.lock = current;
@@ -66,7 +82,7 @@ export async function acquireEditLock(user, key) {
 }
 
 export async function extendEditLock(user, key) {
-  const current = await loadEditLock();
+  const current = await loadEditLock(key);
   if (!isLockActive(current) || current.userId !== user.id) return null;
   const lock = {
     ...current,

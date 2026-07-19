@@ -473,7 +473,7 @@ export async function renderAdminPanel(view, escapeHtml, state, persist) {
   }
   const pending = (await loadPending()).pending;
   const registry = await loadRegistry();
-  const editLock = await loadEditLock();
+  const editLock = await loadEditLock(state.key);
   const globalLocked = isGlobalTreeLocked(registry);
   const accounts = registry.users
     .filter((u) => u.status === 'approved')

@@ -40,7 +40,19 @@ const editLockState = {
   holdsLock: false,
   pollTimer: null,
   heartbeatTimer: null,
+  syncing: false,
 };
+
+const LOCK_HINT_KEY = 'gen_edit_lock_uid';
+
+function setLockHint(userId) {
+  if (userId) sessionStorage.setItem(LOCK_HINT_KEY, userId);
+  else sessionStorage.removeItem(LOCK_HINT_KEY);
+}
+
+function hasLockHint(userId) {
+  return !!(userId && sessionStorage.getItem(LOCK_HINT_KEY) === userId);
+}
 
 // Cache des URLs blob d'images déchiffrées (évite de re-déchiffrer).
 const imageCache = new Map();
@@ -174,7 +186,7 @@ function isExclusiveLockBlocking() {
   return lock.userId !== authSession.user?.id;
 }
 
-function canEditNow(personId = null) {
+function canShowEditUi(personId = null) {
   if (!authMode) return true;
   if (isGlobalLockBlocking()) return false;
   if (isExclusiveLockBlocking()) return false;
@@ -187,6 +199,7 @@ function canPublishNow() {
   if (!canPublish()) return false;
   if (isGlobalLockBlocking()) return false;
   if (isExclusiveLockBlocking()) return false;
+  if (!isAdmin() && !editLockState.holdsLock) return false;
   return true;
 }
 
@@ -223,25 +236,61 @@ function startEditLockPolling() {
 }
 
 async function refreshEditLockState() {
-  if (!authMode) return;
+  if (!authMode || !authSession.user) return;
+  editLockState.syncing = true;
+  renderLockBanner();
   try {
+    await loadBundledGithubConfig();
     const reg = await loadRegistry();
     editLockState.globalLocked = !!reg.treeEditLocked;
     editLockState.globalReason = reg.treeEditLockedReason || '';
-    editLockState.lock = await loadEditLock();
+    editLockState.lock = await loadEditLock(state.key);
     const u = authSession.user;
     editLockState.holdsLock = !!(u && isLockActive(editLockState.lock) && editLockState.lock.userId === u.id);
-    if (!editLockState.holdsLock) stopLockHeartbeat();
-    else if (!editLockState.heartbeatTimer) startLockHeartbeat();
+    if (editLockState.holdsLock) {
+      setLockHint(u.id);
+      if (!editLockState.heartbeatTimer) startLockHeartbeat();
+    } else {
+      stopLockHeartbeat();
+      if (hasLockHint(u.id) && !isLockActive(editLockState.lock) && canEditTree() && !isAdmin()) {
+        setLockHint(null);
+      }
+    }
     renderLockBanner();
     updateSyncStatus();
-  } catch (_) { /* ignore */ }
+  } catch (err) {
+    console.warn('[edit-lock] sync', err);
+  } finally {
+    editLockState.syncing = false;
+    renderLockBanner();
+  }
+}
+
+async function resumeEditLockSession() {
+  const u = authSession.user;
+  if (!u || isAdmin()) return;
+  if (!editLockState.holdsLock) return;
+  try {
+    const lock = await extendEditLock(u, state.key);
+    if (lock) {
+      editLockState.lock = lock;
+      setLockHint(u.id);
+    }
+  } catch (err) {
+    console.warn('[edit-lock] extend', err);
+  }
+  startLockHeartbeat();
+  renderLockBanner();
+  updateSyncStatus();
 }
 
 function renderLockBanner() {
   const el = $('#lock-banner');
   if (!el || !authMode) return;
   const parts = [];
+  if (editLockState.syncing) {
+    parts.push('<span class="lock-banner-msg muted">Acquisition du verrou d\'édition…</span>');
+  }
   if (editLockState.globalLocked) {
     const suffix = isAdmin() ? ' (admin : édition autorisée)' : ' — lecture seule';
     const reason = editLockState.globalReason
@@ -249,22 +298,24 @@ function renderLockBanner() {
       : '';
     parts.push(`<span class="lock-banner-msg">🔒 Arbre verrouillé${reason}${suffix}</span>`);
   }
-  if (isLockActive(editLockState.lock)) {
-    if (editLockState.holdsLock) {
-      parts.push(
-        `<span class="lock-banner-msg">✏️ Vous éditez l'arbre (verrou jusqu'à ${escapeHtml(formatLockExpiry(editLockState.lock.expiresAt))})</span>`,
-        '<button type="button" class="btn btn-ghost lock-banner-btn" id="release-lock">Libérer</button>',
-      );
-    } else {
-      parts.push(
-        `<span class="lock-banner-msg">✏️ ${escapeHtml(editLockState.lock.displayName)} édite l'arbre</span>`,
-      );
-      if (isAdmin()) {
-        parts.push('<button type="button" class="btn btn-ghost lock-banner-btn" id="force-release-lock">Libérer le verrou</button>');
-      }
+  if (editLockState.holdsLock && isLockActive(editLockState.lock)) {
+    parts.push(
+      `<span class="lock-banner-msg">✏️ Vous éditez l'arbre — verrou actif jusqu'à ${escapeHtml(formatLockExpiry(editLockState.lock.expiresAt))}</span>`,
+      '<span class="lock-banner-msg muted">Publiez vos changements ou annulez pour libérer le verrou.</span>',
+    );
+    parts.push('<span class="lock-banner-actions">');
+    if (canPublish()) {
+      parts.push('<button type="button" class="btn lock-banner-btn" id="lock-publish">Publier et libérer</button>');
     }
-  } else if (canEditTree() && !isGlobalLockBlocking()) {
-    parts.push('<button type="button" class="btn btn-ghost lock-banner-btn" id="take-lock">Prendre le verrou d\'édition</button>');
+    parts.push('<button type="button" class="btn btn-ghost lock-banner-btn" id="lock-cancel">Annuler et libérer</button>');
+    parts.push('</span>');
+  } else if (isLockActive(editLockState.lock)) {
+    parts.push(
+      `<span class="lock-banner-msg">✏️ ${escapeHtml(editLockState.lock.displayName)} édite l'arbre — modification impossible.</span>`,
+    );
+    if (isAdmin()) {
+      parts.push('<button type="button" class="btn btn-ghost lock-banner-btn" id="force-release-lock">Libérer le verrou (admin)</button>');
+    }
   }
   if (!parts.length) {
     el.hidden = true;
@@ -273,46 +324,78 @@ function renderLockBanner() {
   }
   el.hidden = false;
   el.innerHTML = parts.join('');
-  $('#take-lock')?.addEventListener('click', () => { void takeEditLock(false); });
-  $('#release-lock')?.addEventListener('click', () => { void releaseMyEditLock(); });
+  $('#lock-publish')?.addEventListener('click', () => { void publishData(); });
+  $('#lock-cancel')?.addEventListener('click', () => { void cancelAndReleaseLock(); });
   $('#force-release-lock')?.addEventListener('click', () => { void forceReleaseEditLock(); });
 }
 
-async function takeEditLock(quiet) {
-  if (!authSession.user) return false;
-  if (isGlobalLockBlocking()) {
-    if (!quiet) alert('L\'arbre est verrouillé par l\'administrateur.');
-    return false;
-  }
-  if (isExclusiveLockBlocking()) {
-    if (!quiet) alert(`L'arbre est en édition par ${editLockState.lock.displayName}.`);
-    return false;
-  }
+async function acquireEditLockForSession() {
+  if (!authSession.user || isAdmin()) return true;
   if (editLockState.holdsLock) return true;
-  if (!quiet && !confirm('Prendre le verrou d\'édition ? Les autres éditeurs seront en lecture seule.')) return false;
+  if (isExclusiveLockBlocking()) return false;
+  editLockState.syncing = true;
+  renderLockBanner();
   try {
-    await acquireEditLock(authSession.user, state.key);
-    await refreshEditLockState();
+    const lock = await acquireEditLock(authSession.user, state.key);
+    editLockState.lock = lock;
+    editLockState.holdsLock = true;
+    setLockHint(authSession.user.id);
     startLockHeartbeat();
+    renderLockBanner();
+    updateSyncStatus();
     return true;
   } catch (err) {
     await refreshEditLockState();
-    if (!quiet) alert(err.message === 'LOCK_HELD'
-      ? `Verrou déjà pris par ${err.lock?.displayName || 'un autre éditeur'}.`
+    throw err;
+  } finally {
+    editLockState.syncing = false;
+    renderLockBanner();
+  }
+}
+
+async function ensureEditAccess(personId) {
+  if (!canShowEditUi(personId)) {
+    if (isGlobalLockBlocking()) {
+      alert(`Arbre verrouillé par l'administrateur${editLockState.globalReason ? ` : ${editLockState.globalReason}` : ''}.`);
+    } else if (isExclusiveLockBlocking()) {
+      alert(`${editLockState.lock.displayName} est en train de modifier l'arbre. Réessayez plus tard.`);
+    } else {
+      alert('Modification non autorisée.');
+    }
+    return false;
+  }
+  if (!authMode || isAdmin()) return true;
+  const needsLock = canEditTree() || (personId && canEditPerson(personId));
+  if (!needsLock) return true;
+  try {
+    return await acquireEditLockForSession();
+  } catch (err) {
+    alert(err.message === 'LOCK_HELD'
+      ? `${err.lock?.displayName || 'Un autre éditeur'} modifie déjà l'arbre.`
       : (githubErrorMessage(err) || err.message));
     return false;
   }
 }
 
-async function releaseMyEditLock() {
-  if (!editLockState.holdsLock) return;
-  if (!confirm('Libérer le verrou d\'édition ?')) return;
+async function cancelAndReleaseLock() {
+  if (!editLockState.holdsLock && !hasLocalEdits()) return;
+  if (!confirm('Annuler vos modifications locales et libérer le verrou ?\n\nLes changements non publiés seront perdus.')) return;
+  const btn = $('#lock-cancel');
+  if (btn) btn.disabled = true;
   try {
-    await releaseEditLock(state.key);
+    localStorage.removeItem(storageKey(TREE_ID));
+    if (editLockState.holdsLock) await releaseEditLock(state.key);
     stopLockHeartbeat();
+    setLockHint(null);
+    editLockState.holdsLock = false;
+    state.container = null;
+    await unlockWithMk(authSession.mkKey);
     await refreshEditLockState();
+    updateSyncStatus();
+    route();
   } catch (err) {
-    alert(githubErrorMessage(err) || err.message);
+    alert('Annulation impossible :\n' + (githubErrorMessage(err) || err.message));
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -322,33 +405,12 @@ async function forceReleaseEditLock() {
   try {
     await releaseEditLock(state.key);
     stopLockHeartbeat();
+    setLockHint(null);
+    editLockState.holdsLock = false;
     await refreshEditLockState();
   } catch (err) {
     alert(githubErrorMessage(err) || err.message);
   }
-}
-
-async function ensureEditAccess(personId) {
-  if (!canEditNow(personId)) {
-    if (isGlobalLockBlocking()) {
-      alert(`Arbre verrouillé par l'administrateur${editLockState.globalReason ? ` : ${editLockState.globalReason}` : ''}.`);
-    } else if (isExclusiveLockBlocking()) {
-      alert(`L'arbre est en édition par ${editLockState.lock.displayName}.`);
-    } else {
-      alert('Modification non autorisée.');
-    }
-    return false;
-  }
-  if (authMode && !isAdmin() && (canEditTree() || (personId && canEditPerson(personId)))) {
-    if (!editLockState.holdsLock && !isLockActive(editLockState.lock)) {
-      return takeEditLock(false);
-    }
-    if (isExclusiveLockBlocking()) {
-      alert(`L'arbre est en édition par ${editLockState.lock.displayName}.`);
-      return false;
-    }
-  }
-  return true;
 }
 
 async function initRemoteTreeBaseline() {
@@ -369,8 +431,15 @@ function initEditLockSystem() {
   if (!window._genEditLockWired) {
     window._genEditLockWired = true;
     window.addEventListener('gen-edit-lock-changed', () => { void refreshEditLockState(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && authSession.user) void refreshEditLockState();
+    });
   }
-  void refreshEditLockState().then(() => startEditLockPolling());
+  void (async () => {
+    await refreshEditLockState();
+    await resumeEditLockSession();
+    startEditLockPolling();
+  })();
 }
 
 // Télécharge le fichier chiffré courant (secours si la publication GitHub échoue).
@@ -419,6 +488,7 @@ async function publishData() {
     if (editLockState.holdsLock) {
       try { await releaseEditLock(state.key); } catch (_) { /* ignore */ }
       stopLockHeartbeat();
+      setLockHint(null);
     }
     state.sessionTreeSha = await fetchRemoteTreeSha(state.key, TREE_ID);
     await refreshEditLockState();
@@ -772,8 +842,8 @@ function openForm(title, initial, onSubmit, extraHtml = '') {
 
 // Applique une modification puis persiste et navigue vers `goId`.
 async function applyEdit(fn, goId) {
+  if (!(await ensureEditAccess(goId))) return;
   const id = fn();
-  if (!(await ensureEditAccess(goId || id))) return;
   await persist();
   updateSyncStatus();
   const target = goId || id;
@@ -877,6 +947,7 @@ function logout() {
   }
   stopLockHeartbeat();
   stopEditLockPolling();
+  setLockHint(null);
   editLockState.lock = null;
   editLockState.globalLocked = false;
   editLockState.globalReason = '';
@@ -1133,8 +1204,8 @@ function renderPerson(view, id) {
            data-placeholder="portrait placeholder" data-icon="${icon}" alt="${escapeHtml(p.name)}" />`)
     : `<div class="portrait placeholder">${icon}</div>`;
 
-  const canEdit = canEditNow(id);
-  const canEditFam = canEditNow() && (!authMode || canEditTree());
+  const canEdit = canShowEditUi(id);
+  const canEditFam = canShowEditUi();
 
   view.innerHTML = `
     <section class="panel person">
@@ -1175,11 +1246,14 @@ function renderPerson(view, id) {
 
   // Actions d'édition
   const act = (sel, fn) => { const b = view.querySelector(`[data-act="${sel}"]`); if (b) b.addEventListener('click', fn); };
-  act('edit', () => openForm('Modifier ' + p.name, {
-    given: p.given, surname: p.surname, marriedSurname: p.marriedSurname || '', sex: p.sex,
-    birthDate: p.birth?.date, birthPlace: p.birth?.place,
-    deathDate: p.death?.date, deathPlace: p.death?.place,
-  }, (d) => applyEdit(() => { editPerson(id, d); return id; }, id)));
+  act('edit', async () => {
+    if (!(await ensureEditAccess(id))) return;
+    openForm('Modifier ' + p.name, {
+      given: p.given, surname: p.surname, marriedSurname: p.marriedSurname || '', sex: p.sex,
+      birthDate: p.birth?.date, birthPlace: p.birth?.place,
+      deathDate: p.death?.date, deathPlace: p.death?.place,
+    }, (d) => applyEdit(() => { editPerson(id, d); return id; }, id));
+  });
   act('delete', async () => {
     if (!confirm(`Supprimer « ${p.name} » de l'arbre ?\nLes liens familiaux vers cette personne seront retirés.`)) return;
     if (!(await ensureEditAccess(id))) return;
@@ -1188,9 +1262,16 @@ function renderPerson(view, id) {
     updateSyncStatus();
     location.hash = '#/';
   });
-  act('add-parent', () => openForm('Ajouter un parent', {}, (d) => applyEdit(() => addParent(id, d), id)));
-  act('add-spouse', () => openForm('Ajouter un·e conjoint·e', {}, (d) => applyEdit(() => addSpouse(id, d), id)));
-  act('add-child', () => {
+  act('add-parent', async () => {
+    if (!(await ensureEditAccess(id))) return;
+    openForm('Ajouter un parent', {}, (d) => applyEdit(() => addParent(id, d), id));
+  });
+  act('add-spouse', async () => {
+    if (!(await ensureEditAccess(id))) return;
+    openForm('Ajouter un·e conjoint·e', {}, (d) => applyEdit(() => addSpouse(id, d), id));
+  });
+  act('add-child', async () => {
+    if (!(await ensureEditAccess(id))) return;
     // Rôle de l'autre parent selon le sexe du focus (comme MyHeritage).
     const role = p.sex === 'M' ? 'mère' : p.sex === 'F' ? 'père' : 'autre parent';
     const Role = role.charAt(0).toUpperCase() + role.slice(1);
@@ -1217,7 +1298,8 @@ function renderPerson(view, id) {
   });
 
   // Photos
-  act('add-photo', () => {
+  act('add-photo', async () => {
+    if (!(await ensureEditAccess(id))) return;
     const input = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*' });
     input.addEventListener('change', async () => {
       const file = input.files && input.files[0];

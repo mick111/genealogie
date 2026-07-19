@@ -89,6 +89,34 @@ export async function getGithubTokenFromMk() {
   return getGithubToken(authSession.mkKey);
 }
 
+// Token pour publier : PAT local (si configuré) ou clé maître de session.
+export async function getGithubTokenForPublish(key) {
+  if (key) {
+    try { return await getGithubToken(key); } catch (_) { /* MK */ }
+  }
+  return getGithubTokenFromMk();
+}
+
+// Lit un fichier texte du dépôt via l'API (à jour, contrairement au site statique).
+export async function fetchRepoFileText(path, token) {
+  const meta = loadGithubMeta();
+  if (!meta?.owner || !meta?.repo) throw new Error('GITHUB_META');
+  const pathEnc = encodeURIComponent(path).replace(/%2F/g, '/');
+  const refQ = `?ref=${encodeURIComponent(meta.branch || 'main')}`;
+  let body;
+  try {
+    body = await ghFetch(`/repos/${meta.owner}/${meta.repo}/contents/${pathEnc}${refQ}`, token);
+  } catch (err) {
+    if (err.status === 404) return null;
+    throw err;
+  }
+  if (!body?.content) return null;
+  const bin = atob(body.content.replace(/\s/g, ''));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
 function utf8ToB64(text) {
   const bytes = new TextEncoder().encode(text);
   let bin = '';
@@ -188,22 +216,21 @@ export async function publishFile(owner, repo, path, branch, token, content, mes
       }),
     });
   };
-  onStage('Lecture du fichier distant…');
-  let sha;
-  try {
-    const existing = await ghFetch(`/repos/${owner}/${repo}/contents/${pathEnc}${refQ}`, token);
-    sha = existing.sha;
-  } catch (err) {
-    if (err.status !== 404) throw err;
-  }
-  try {
-    await put(sha);
-  } catch (err) {
-    // Conflit : le fichier a changé sur GitHub entre la lecture et l'envoi (ex. registry.json).
-    if (err.status !== 409 || !sha) throw err;
-    onStage('Conflit distant, nouvelle tentative…');
-    const existing = await ghFetch(`/repos/${owner}/${repo}/contents/${pathEnc}${refQ}`, token);
-    await put(existing.sha);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    onStage(attempt ? 'Conflit distant, nouvelle tentative…' : 'Lecture du fichier distant…');
+    let sha;
+    try {
+      const existing = await ghFetch(`/repos/${owner}/${repo}/contents/${pathEnc}${refQ}`, token);
+      sha = existing.sha;
+    } catch (err) {
+      if (err.status !== 404) throw err;
+    }
+    try {
+      await put(sha);
+      return;
+    } catch (err) {
+      if (err.status !== 409 || attempt >= 3) throw err;
+    }
   }
 }
 
