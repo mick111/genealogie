@@ -14,7 +14,7 @@ import {
 } from './auth/boot.js';
 import { authSession, canEditPerson, canEditTree, canPublish, needsPersonLink, isAdmin } from './auth/session.js';
 import {
-  loadEditLock, acquireEditLock, extendEditLock, releaseEditLock,
+  loadEditLock, acquireEditLock, extendEditLock, releaseEditLock, emptyEditLock,
   isLockActive, HEARTBEAT_MS, POLL_MS,
 } from './auth/edit-lock.js';
 import { loadRegistry } from './auth/registry.js';
@@ -385,9 +385,7 @@ async function cancelAndReleaseLock() {
   try {
     localStorage.removeItem(storageKey(TREE_ID));
     if (editLockState.holdsLock) await releaseEditLock(state.key);
-    stopLockHeartbeat();
-    setLockHint(null);
-    editLockState.holdsLock = false;
+    clearLocalEditLock();
     state.container = null;
     await unlockWithMk(authSession.mkKey);
     await refreshEditLockState();
@@ -404,13 +402,19 @@ async function forceReleaseEditLock() {
   if (!confirm('Libérer le verrou d\'édition de force ?')) return;
   try {
     await releaseEditLock(state.key);
-    stopLockHeartbeat();
-    setLockHint(null);
-    editLockState.holdsLock = false;
+    clearLocalEditLock();
     await refreshEditLockState();
   } catch (err) {
     alert(githubErrorMessage(err) || err.message);
   }
+}
+
+function clearLocalEditLock() {
+  stopLockHeartbeat();
+  setLockHint(null);
+  editLockState.holdsLock = false;
+  editLockState.lock = emptyEditLock();
+  renderLockBanner();
 }
 
 async function initRemoteTreeBaseline() {
@@ -480,16 +484,31 @@ async function publishData() {
   };
   if (btn) btn.disabled = true;
   if (badge) badge.disabled = true;
+  const lockPublish = $('#lock-publish');
+  const lockCancel = $('#lock-cancel');
+  if (lockPublish) lockPublish.disabled = true;
+  if (lockCancel) lockCancel.disabled = true;
   setStatus('Publication…');
   try {
+    if (editLockState.holdsLock) stopLockHeartbeat();
     await persist();
     await publishTree(state.key, state.container, setStatus, TREE_ID);
     localStorage.removeItem(storageKey(TREE_ID));
+    let lockReleased = !editLockState.holdsLock;
     if (editLockState.holdsLock) {
-      try { await releaseEditLock(state.key); } catch (_) { /* ignore */ }
-      stopLockHeartbeat();
-      setLockHint(null);
+      try {
+        await releaseEditLock(state.key);
+        lockReleased = true;
+      } catch (err) {
+        console.warn('[edit-lock] release after publish', err);
+        alert(
+          'Modifications publiées, mais la libération du verrou a échoué :\n'
+          + (githubErrorMessage(err) || err.message)
+          + '\n\nUtilisez « Annuler et libérer » ou reconnectez-vous.',
+        );
+      }
     }
+    if (lockReleased) clearLocalEditLock();
     state.sessionTreeSha = await fetchRemoteTreeSha(state.key, TREE_ID);
     await refreshEditLockState();
     updateSyncStatus();

@@ -15,22 +15,31 @@ function emptyLock() {
   return { v: 1, userId: null, displayName: null, since: null, expiresAt: null };
 }
 
+export function emptyEditLock() {
+  return emptyLock();
+}
+
 export function isLockActive(lock) {
   if (!lock?.userId || !lock?.expiresAt) return false;
   return new Date(lock.expiresAt) > new Date();
 }
 
-// Lecture via l'API GitHub (fraîche) ; repli sur le fichier statique du site.
+// Lecture via l'API GitHub (fraîche) ; repli statique seulement sans token (évite un verrou périmé après libération).
 export async function loadEditLock(key = null) {
   try {
     const site = await loadSiteConfig();
     const { editLock: path } = authPaths(site);
     let text = null;
+    let viaApi = false;
     try {
       await loadBundledGithubConfig();
       const token = await getGithubTokenForPublish(key);
+      viaApi = true;
       text = await fetchRepoFileText(path, token);
-    } catch (_) { /* token ou API indisponible */ }
+      if (text == null) return emptyLock();
+    } catch (_) {
+      if (viaApi) return emptyLock();
+    }
     if (text == null) {
       text = await fetchTextFile(`${path}?_=${Date.now()}`);
     }
