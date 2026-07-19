@@ -27,7 +27,12 @@ function mergeRegistryUsers(remote, local) {
   const localById = new Map(local.users.map((u) => [u.id, u]));
   const users = remote.users.map((remoteUser) => {
     const patch = localById.get(remoteUser.id);
-    return patch ? { ...remoteUser, ...patch } : remoteUser;
+    if (!patch) return remoteUser;
+    const merged = { ...remoteUser, ...patch };
+    if (patch.setupRequired === false || (!patch.setupWrap && remoteUser.setupWrap && patch.pinWrap)) {
+      delete merged.setupWrap;
+    }
+    return merged;
   });
   for (const u of local.users) {
     if (!users.some((x) => x.id === u.id)) users.push(u);

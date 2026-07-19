@@ -22,6 +22,11 @@
   </div>
   <div id="app" hidden></div>
   <footer id="site-version" class="site-version" hidden aria-label="Version du site"></footer>
-  <script type="module" src="js/app.js"></script>
+  <script type="module">
+    const { commit = '' } = await fetch('version.json', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : {}))
+      .catch(() => ({}));
+    await import(`./js/app.js?${encodeURIComponent(commit)}`);
+  </script>
 </body>
 </html>

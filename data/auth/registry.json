@@ -31,14 +31,6 @@
       "role": "editor",
       "status": "approved",
       "personId": null,
-      "setupRequired": false,
-      "setupWrap": {
-        "v": 1,
-        "ephPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPTV63DTxe6V8/b1C9UZc6fZgOtsh8hO9X6EOwjKr5P7OmqdtnMesa9UzJXHiCpzNC6xDAh/42tHCbbinWstlTA==",
-        "cipher": "AES-GCM",
-        "iv": "GwDjM+/e5VdAtTjH",
-        "ct": "OmpLUAe1tBD2xKExw/xLtDecEKVWY97jskJdf5wrTlBj1ZkDkv/vvF0x67iGcgL1"
-      },
       "createdAt": "2026-07-19T17:17:56.626Z",
       "pinWrap": {
         "v": 1,
