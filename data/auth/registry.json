@@ -92,6 +92,24 @@
         "ct": "8MwPypEuh0NxjNQ+fkG4z18v329bfUipMfjoKiF//e62829BDIQTSwZrzTeL2U3d"
       },
       "createdAt": "2026-07-19T20:37:45.868Z"
+    },
+    {
+      "id": "2e3b8e05-97cc-4f89-b8a8-12dabaaaebbf",
+      "displayName": "Jean-Michel",
+      "credentialId": "wPXW2YJpEAVzO8jnZcXUuA==",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyU4uxJzlM8HeD2vb4SBc91RIuwgBC7Qk+/LuZl4vmfL+oTdaG7Z48QE8Ln/p1hRIN+Z1YnGlErK9nqXZYIwjoA==",
+      "role": "editor",
+      "status": "approved",
+      "personId": null,
+      "setupRequired": true,
+      "setupWrap": {
+        "v": 1,
+        "ephPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZ42avODNzI2+kUYXk/afWE2gV3oYYxBRkfubONzzJ40/jaI7meJMRiO4NbZjjAlIf0ZKopCTJlG1KsVgUhFrqg==",
+        "cipher": "AES-GCM",
+        "iv": "DPALYLhkwId8J2XT",
+        "ct": "Tk9uISr25KOVk5/X7icP+y+4LqFR0rMbppJMCyciBZLmc1PTduG2m24aj+2b8GGt"
+      },
+      "createdAt": "2026-07-19T20:39:42.737Z"
     }
   ]
 }
