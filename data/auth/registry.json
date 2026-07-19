@@ -74,6 +74,24 @@
         "iv": "BVrqcfUvFL4UhzHt",
         "ct": "DvIaHXGxRHv8P5xkP54KmU41F2kuSLlqxY9xE8FFRD1BI41MVHZ54McpRwq95oD7"
       }
+    },
+    {
+      "id": "fd034713-20f6-4090-afbb-10048b1228b6",
+      "displayName": "Sandrine MARESCQ",
+      "credentialId": "o6GL82mMC1RwB3S1fi1a1KmbfCg=",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+OP73J5W8rwPMH8QlYuuFYTz7BAfiG81T58e1cev1cJmNmN/ctNl3qHJLH1VvvCoXVMk+G/SU3eNLLZsPeslPw==",
+      "role": "editor",
+      "status": "approved",
+      "personId": null,
+      "setupRequired": true,
+      "setupWrap": {
+        "v": 1,
+        "ephPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXBg6fzECNMVTkDcGBmkfWAR5gEUfI/zFix2HsRgl311Vpyucoh74bJtSnMuzCvw3In1SPKtDAAxNwRDOwls1yA==",
+        "cipher": "AES-GCM",
+        "iv": "YBI8g3yib38tl6TO",
+        "ct": "8MwPypEuh0NxjNQ+fkG4z18v329bfUipMfjoKiF//e62829BDIQTSwZrzTeL2U3d"
+      },
+      "createdAt": "2026-07-19T20:37:45.868Z"
     }
   ]
 }
