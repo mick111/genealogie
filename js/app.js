@@ -13,16 +13,13 @@ import {
 } from './auth/boot.js';
 import { authSession, canEditPerson, canEditTree, canPublish, needsPersonLink, isAdmin } from './auth/session.js';
 import {
-  loadTreesIndex, getCurrentTreeId, setCurrentTreeId, findTreeMeta,
-  treeEncUrl, treeMediaDir, storageKey, defaultGithubPath,
+  TREE_ID, treeEncUrl, treeMediaDir, storageKey, defaultGithubPath,
 } from './trees.js';
 
 const MAX_GEN = 4; // générations affichées dans l'arbre ascendant
 let authMode = false;
 
 const state = {
-  trees: null,          // catalogue depuis trees/index.json
-  treeId: null,         // arbre courant
   container: null,      // conteneur chiffré (JSON)
   key: null,            // clé AES dérivée (réutilisée pour les photos)
   individuals: null,    // Map id -> individu
@@ -55,7 +52,7 @@ function personLifespan(indi) {
 function mediaEncUrl(file) {
   const clean = file.split(/[?#]/)[0];
   const base = clean.split(/[\\/]/).pop();
-  return treeMediaDir(state.treeId) + base + '.enc';
+  return treeMediaDir(TREE_ID) + base + '.enc';
 }
 
 function migrateLegacyStorage(treeId) {
@@ -65,14 +62,14 @@ function migrateLegacyStorage(treeId) {
     localStorage.setItem(key, legacy);
     localStorage.removeItem('gen_data_v1');
   }
+  localStorage.removeItem('gen_tree_id');
 }
 
 // --------------------------------------------------------------------- login
 async function loadContainer() {
-  if (!state.treeId) throw new Error('Aucun arbre sélectionné.');
-  const key = storageKey(state.treeId);
+  const key = storageKey(TREE_ID);
   const fetchRemote = async () => {
-    const res = await fetch(treeEncUrl(state.treeId), { cache: 'no-store' });
+    const res = await fetch(treeEncUrl(TREE_ID), { cache: 'no-store' });
     if (!res.ok) throw new Error('Impossible de charger les données (' + res.status + ').');
     return res.json();
   };
@@ -104,11 +101,7 @@ async function loadContainer() {
 }
 
 function hasLocalEdits() {
-  return !!localStorage.getItem(storageKey(state.treeId));
-}
-
-function currentTreeMeta() {
-  return findTreeMeta(state.trees, state.treeId);
+  return !!localStorage.getItem(storageKey(TREE_ID));
 }
 
 // Télécharge le fichier chiffré courant (secours si la publication GitHub échoue).
@@ -118,7 +111,7 @@ async function exportData() {
   const blob = new Blob([JSON.stringify(container)], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), {
-    href: url, download: `${state.treeId}.enc`,
+    href: url, download: 'tree.enc',
   });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -131,7 +124,7 @@ async function publishData() {
     openGithubSettings(() => publishData());
     return;
   }
-  const path = defaultGithubPath(state.treeId);
+  const path = defaultGithubPath(TREE_ID);
   if (!confirm(`Publier l'arbre sur GitHub ?\n\n${saved.owner}/${saved.repo} → ${path} (${saved.branch || 'main'})`)) return;
 
   const btn = $('#publish');
@@ -139,8 +132,8 @@ async function publishData() {
   if (btn) { btn.disabled = true; btn.textContent = 'Publication…'; }
   try {
     await persist();
-    await publishTree(state.key, state.container, (s) => { if (btn) btn.textContent = s; }, state.treeId);
-    localStorage.removeItem(storageKey(state.treeId));
+    await publishTree(state.key, state.container, (s) => { if (btn) btn.textContent = s; }, TREE_ID);
+    localStorage.removeItem(storageKey(TREE_ID));
     updateSyncStatus();
     alert('Arbre publié sur GitHub.\n\nLe site en ligne sera à jour dans quelques instants.');
   } catch (err) {
@@ -157,7 +150,7 @@ function openGithubSettings(onSaved) {
     owner: saved.owner || detected?.owner || '',
     repo: saved.repo || detected?.repo || '',
     branch: saved.branch || 'main',
-    path: defaultGithubPath(state.treeId),
+    path: defaultGithubPath(TREE_ID),
   };
   const wrap = document.createElement('div');
   wrap.className = 'modal-overlay';
@@ -169,7 +162,7 @@ function openGithubSettings(onSaved) {
       <label>Propriétaire<input name="owner" value="${escapeHtml(meta.owner || '')}" placeholder="ex. mick111" required></label>
       <label>Dépôt<input name="repo" value="${escapeHtml(meta.repo || '')}" placeholder="ex. genealogie" required></label>
       <label>Branche<input name="branch" value="${escapeHtml(meta.branch || 'main')}"></label>
-      <label>Fichier<input name="path" value="${escapeHtml(meta.path || defaultGithubPath(state.treeId))}"></label>
+      <label>Fichier<input name="path" value="${escapeHtml(meta.path || defaultGithubPath(TREE_ID))}"></label>
       <label>Token GitHub (PAT)
         <input name="token" type="password" autocomplete="off"
           placeholder="${hasGithubToken() ? '••••••••  (laisser vide pour conserver)' : 'ghp_… ou github_pat_…'}"
@@ -244,7 +237,7 @@ async function persist() {
     }
     state.container = await encryptText(state.key, state.container.kdf, text);
   }
-  localStorage.setItem(storageKey(state.treeId), JSON.stringify(state.container));
+  localStorage.setItem(storageKey(TREE_ID), JSON.stringify(state.container));
 }
 
 // ---- modifications du modèle -----------------------------------------------
@@ -521,63 +514,19 @@ async function hydrateImages(root) {
   }
 }
 
-function renderTreePicker(errorMsg, onSelected) {
-  $('#app').hidden = true;
-  const login = $('#login');
-  login.hidden = false;
-  login.innerHTML = `
-    <div class="login-card tree-picker">
-      <h1>🌳 Choisir un arbre</h1>
-      <p class="muted">${authMode
-        ? 'Choisissez l\'arbre à consulter (même compte, même session).'
-        : 'Chaque arbre a son propre mot de passe.'}</p>
-      <div class="tree-list">
-        ${state.trees.map((t) => `
-          <button type="button" class="tree-choice" data-id="${escapeHtml(t.id)}">
-            <span class="tree-choice-name">${escapeHtml(t.name)}</span>
-            ${t.description ? `<span class="muted tree-choice-desc">${escapeHtml(t.description)}</span>` : ''}
-          </button>`).join('')}
-      </div>
-      ${errorMsg ? `<pre class="error err-detail">${escapeHtml(errorMsg)}</pre>` : ''}
-    </div>`;
-  login.querySelectorAll('.tree-choice').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      setCurrentTreeId(btn.dataset.id);
-      state.treeId = btn.dataset.id;
-      migrateLegacyStorage(state.treeId);
-      state.container = null;
-      if (onSelected) onSelected();
-      else renderLogin();
-    });
-  });
-}
-
 function renderLogin(errorMsg) {
   $('#app').hidden = true;
   const login = $('#login');
   login.hidden = false;
-  const meta = currentTreeMeta();
-  const canSwitch = state.trees.length > 1;
   login.innerHTML = `
     <form id="login-form" class="login-card" autocomplete="off">
       <h1>🌳 Arbre généalogique</h1>
-      ${meta ? `<p class="muted tree-current">Arbre : <strong>${escapeHtml(meta.name)}</strong>${
-        canSwitch ? ' · <button type="button" class="link-btn" id="change-tree">Changer</button>' : ''
-      }</p>` : ''}
       <p class="muted">Accès protégé. Entrez le mot de passe.</p>
       <input type="password" id="pw" placeholder="Mot de passe" autocomplete="current-password" autofocus />
       <button type="submit">Déverrouiller</button>
       <p id="login-status" class="muted"></p>
       ${errorMsg ? `<pre class="error err-detail">${escapeHtml(errorMsg)}</pre>` : ''}
     </form>`;
-  const changeBtn = $('#change-tree');
-  if (changeBtn) changeBtn.addEventListener('click', () => {
-    sessionStorage.removeItem('gen_pass');
-    setCurrentTreeId('');
-    state.treeId = null;
-    state.container = null;
-    renderTreePicker();
-  });
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const pw = $('#pw').value;
@@ -618,7 +567,7 @@ async function afterAuthUnlock(mkKey) {
     showApp();
   } catch (err) {
     if (authMode && (err.message === 'BAD_PASSWORD' || err.message === 'LEGACY_TREE')) {
-      localStorage.removeItem(storageKey(state.treeId));
+      localStorage.removeItem(storageKey(TREE_ID));
       state.container = null;
       try {
         await unlockWithMk(mkKey);
@@ -633,41 +582,8 @@ async function afterAuthUnlock(mkKey) {
   }
 }
 
-function switchTree() {
-  if (authMode && authSession.mkKey) {
-    for (const url of imageCache.values()) URL.revokeObjectURL(url);
-    imageCache.clear();
-    state.key = null;
-    state.individuals = null;
-    state.families = null;
-    state.container = null;
-    setCurrentTreeId('');
-    state.treeId = null;
-    $('#app').hidden = true;
-    location.hash = '';
-    renderTreePicker(null, async () => {
-      try {
-        await unlockWithMk(authSession.mkKey);
-        showApp();
-      } catch (err) {
-        alert('Impossible de déverrouiller l\'arbre : ' + (err.message || err));
-        renderAuthGate(escapeHtml, afterAuthUnlock);
-      }
-    });
-    return;
-  }
-  logout();
-  setCurrentTreeId('');
-  state.treeId = null;
-  if (authMode) renderTreePicker(null, () => renderAuthGate(escapeHtml, afterAuthUnlock));
-  else renderTreePicker();
-}
-
 function topbarMenuItems({ allowPublish, allowExport, withSearch }) {
   const items = [];
-  if (state.trees.length > 1) {
-    items.push('<button type="button" id="switch-tree" class="topbar-menu-item">Changer d\'arbre</button>');
-  }
   if (authMode) items.push('<a href="#/account" class="topbar-menu-item">Mon compte</a>');
   if (isAdmin()) items.push('<a href="#/admin" class="topbar-menu-item">Administration</a>');
   if (allowPublish) {
@@ -716,7 +632,6 @@ function wireTopbar({ allowPublish, allowExport, withSearch }) {
     document.addEventListener('click', window._topbarDocClick);
   }
   $('#logout')?.addEventListener('click', logout);
-  $('#switch-tree')?.addEventListener('click', switchTree);
   $('#export')?.addEventListener('click', exportData);
   if (allowPublish) {
     $('#publish')?.addEventListener('click', publishData);
@@ -747,7 +662,7 @@ function showApp() {
   }
   const allowPublish = !authMode || canPublish();
   const allowExport = allowPublish || hasLocalEdits();
-  const treeName = escapeHtml(currentTreeMeta()?.name || 'Généalogie');
+  const treeName = 'Généalogie';
   const { search, menu } = topbarMenuItems({ allowPublish, allowExport, withSearch: true });
   $('#login').hidden = true;
   const app = $('#app');
@@ -1055,11 +970,37 @@ function renderInsecureContextError() {
     </div>`;
 }
 
-function defaultAuthTreeId(trees) {
-  const principal = findTreeMeta(trees, 'principal');
-  if (principal) return principal.id;
-  const nonDemo = trees.find((t) => t.id !== 'exemple');
-  return (nonDemo || trees[0]).id;
+async function boot() {
+  if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
+    renderInsecureContextError();
+    return;
+  }
+
+  renderSiteVersion();
+  migrateLegacyStorage(TREE_ID);
+
+  authMode = await authModeAvailable();
+
+  if (authMode) {
+    renderAuthGate(escapeHtml, afterAuthUnlock);
+    return;
+  }
+
+  const tokenMatch = /(?:^#|&)token=([^&]+)/.exec(location.hash);
+  const stored = sessionStorage.getItem('gen_pass');
+  const auto = tokenMatch ? decodeURIComponent(tokenMatch[1]) : stored;
+
+  if (auto) {
+    try {
+      await unlock(auto);
+      if (tokenMatch) history.replaceState(null, '', location.pathname + '#/');
+      showApp();
+      return;
+    } catch (_) {
+      sessionStorage.removeItem('gen_pass');
+    }
+  }
+  renderLogin();
 }
 
 async function renderSiteVersion() {
@@ -1094,64 +1035,6 @@ async function renderSiteVersion() {
     }
     el.hidden = false;
   } catch (_) { /* version.json absent */ }
-}
-
-async function boot() {
-  if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
-    renderInsecureContextError();
-    return;
-  }
-
-  renderSiteVersion();
-
-  authMode = await authModeAvailable();
-
-  try {
-    state.trees = await loadTreesIndex();
-  } catch (err) {
-    if (authMode) renderAuthGate(escapeHtml, afterAuthUnlock);
-    else renderLogin((err && err.message) || String(err));
-    return;
-  }
-
-  let treeId = getCurrentTreeId();
-  if (!treeId || !findTreeMeta(state.trees, treeId)) {
-    if (state.trees.length === 1) {
-      treeId = state.trees[0].id;
-      setCurrentTreeId(treeId);
-    } else if (authMode) {
-      treeId = defaultAuthTreeId(state.trees);
-      setCurrentTreeId(treeId);
-    } else {
-      renderTreePicker();
-      return;
-    }
-  }
-  if (treeId) {
-    state.treeId = treeId;
-    migrateLegacyStorage(state.treeId);
-  }
-
-  if (authMode) {
-    renderAuthGate(escapeHtml, afterAuthUnlock);
-    return;
-  }
-
-  const tokenMatch = /(?:^#|&)token=([^&]+)/.exec(location.hash);
-  const stored = sessionStorage.getItem('gen_pass');
-  const auto = tokenMatch ? decodeURIComponent(tokenMatch[1]) : stored;
-
-  if (auto) {
-    try {
-      await unlock(auto);
-      if (tokenMatch) history.replaceState(null, '', location.pathname + '#/');
-      showApp();
-      return;
-    } catch (_) {
-      sessionStorage.removeItem('gen_pass');
-    }
-  }
-  renderLogin();
 }
 
 boot();

@@ -8,7 +8,6 @@ fichier publié est illisible sans le mot de passe, même en regardant le code s
 - Fonctionnalités : **3 vues d'arbre** (Famille/sablier, Pedigree, Éventail) avec
   choix du nombre de générations, fiches individuelles, recherche, photos.
 - **Édition** : ajouter parents / conjoint·e / enfants, modifier une fiche.
-- **Plusieurs arbres** : choix au démarrage (`trees/`), chacun avec son mot de passe.
 - Accès par **mot de passe** ou par **lien avec token** ; option **comptes passkey**
   pour la famille (voir §5).
 
@@ -44,23 +43,19 @@ node tools/build.mjs mon-arbre.ged --tree principal
 
 Cela produit :
 
-- `trees/<id>/tree.enc` — le GEDCOM chiffré ;
-- `trees/<id>/media/<photo>.jpg.enc` — chaque image chiffrée.
-
-Le catalogue des arbres est dans `trees/index.json`. L'exemple factice est dans
-`trees/exemple/` (mot de passe : `famille2024`).
+- `trees/principal/tree.enc` — le GEDCOM chiffré ;
+- `trees/principal/media/<photo>.jpg.enc` — chaque image chiffrée.
 
 Ce sont ces fichiers `.enc` **qui sont publiés**. Refais cette commande à chaque
-mise à jour de ton arbre ou de tes photos. Pour changer de mot de passe, relance
-simplement le build avec le nouveau (tout est re-chiffré).
+mise à jour de ton arbre ou de tes photos.
 
-> Test rapide : `node tools/verify.mjs --tree principal` ou `--tree exemple`
+> Test rapide : `node tools/verify.mjs --tree principal`
 
 ## 3. Tester en local
 
 ```bash
 python3 -m http.server 8000
-# puis ouvre http://localhost:8000  (mot de passe de l'exemple : famille2024)
+# puis ouvre http://localhost:8000
 ```
 
 Il faut un serveur HTTP (les modules ES ne se chargent pas via `file://`).
@@ -223,18 +218,17 @@ js/gedcom.js         parseur GEDCOM
 js/tree.js           arbre ascendant SVG
 js/app.js            application (login, routing, fiches, recherche)
 js/auth/             authentification passkey + PIN (si site.json)
-js/trees.js           catalogue et chemins multi-arbres
+js/trees.js           chemins de l'arbre (trees/principal/)
 js/github.js         publication GitHub (token chiffré)
 data/github_token.enc  token GitHub admin chiffré (publié)
 data/github_reg_token.enc  token inscriptions auto chiffré (publié)
 data/github_meta.json  config dépôt GitHub
 data/auth/           registry + pending (mode passkey)
-trees/index.json       catalogue des arbres
-trees/<id>/tree.enc    GEDCOM chiffré (généré, publié)
-trees/<id>/media/*.enc photos chiffrées (générées, publiées)
-tools/build.mjs      chiffre le .ged + les photos  ->  trees/<id>/
+trees/principal/tree.enc    GEDCOM chiffré (généré, publié)
+trees/principal/media/*.enc photos chiffrées (générées, publiées)
+tools/build.mjs      chiffre le .ged + les photos  ->  trees/principal/
 tools/migrate-auth.mjs  migration mot de passe → clé maître + auth
 tools/encrypt-auth-tokens.mjs  chiffre token_publish / token_register
 tools/verify.mjs     test local déchiffrement + parsing
-sample/famille.ged   exemple factice (mot de passe : famille2024)
+sample/famille.ged   GEDCOM factice pour tests locaux
 ```
