@@ -61,7 +61,19 @@
         "iv": "CttPX3QLQekyXKwI",
         "ct": "NifPZ6VCSjFEBSXeTpxebmVS6k6WId8pnNlnDzXGbz9UXYjqDrmXkz6fDqTOG+VO"
       },
-      "createdAt": "2026-07-19T17:38:46.142Z"
+      "createdAt": "2026-07-19T17:38:46.142Z",
+      "pinWrap": {
+        "v": 1,
+        "cipher": "AES-GCM",
+        "iv": "7x6Sn4eZN1nHuCbs",
+        "ct": "XPnvuTcnRXtIFAs8nDwCL2umrXz48TIGNRbzDw5siJXt/igQu/sn90q2bFrz4EMs"
+      },
+      "prfWrap": {
+        "v": 1,
+        "cipher": "AES-GCM",
+        "iv": "BVrqcfUvFL4UhzHt",
+        "ct": "DvIaHXGxRHv8P5xkP54KmU41F2kuSLlqxY9xE8FFRD1BI41MVHZ54McpRwq95oD7"
+      }
     }
   ]
 }
